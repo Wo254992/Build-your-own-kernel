@@ -62,15 +62,16 @@ jobs:
       kernelsu_branch_default: 'Dev(开发)'
       version_type_default: '随机生成'
       custom_version_suffix_default: ''
-      use_zram_default: 'true'  # 关键修改：布尔值转为字符串
-      use_kpm_default: 'true'  # 关键修改：布尔值转为字符串
+      use_zram_default: 'true' 
+      use_kpm_default: 'false' 
     steps:
-      - name: Restore last processed run ID from cache
-        id: cache_restore_id
+      - name: Manage last processed run ID cache # 可以稍微改下名字，更清晰
+        id: cache_run_id # ID也可以改得更明确
         uses: actions/cache@v4
         with:
           path: ./last_processed_sukisu_run_id.txt
           key: latest-processed-sukisu-run-id
+          save-always: true # <--- 关键添加：确保即使主键命中，如果文件内容改变或需要保存时，也会尝试保存
 
       - name: Check for new successful run in ShirkNeko/SukiSU-Ultra
         id: check
@@ -88,6 +89,8 @@ jobs:
             echo "No successful 'push' event runs found in $TARGET_REPO/$TARGET_WORKFLOW_FILE or API error."
             echo "new_run_detected=false" >> "$GITHUB_OUTPUT"
             echo "latest_external_run_id=" >> "$GITHUB_OUTPUT"
+            # 如果没有获取到远程ID，且本地缓存文件存在，不要去修改本地缓存文件，让它保持原样
+            # 如果本地缓存文件不存在，也不需要创建空的，避免不必要的缓存保存
             exit 0 
           fi
 
@@ -95,25 +98,40 @@ jobs:
           echo "latest_external_run_id=$LATEST_EXTERNAL_RUN_ID" >> "$GITHUB_OUTPUT"
 
           CACHED_RUN_ID=""
+          # 尝试读取缓存文件，如果不存在，CACHED_RUN_ID 会是空
           if [[ -f "./last_processed_sukisu_run_id.txt" ]]; then
             CACHED_RUN_ID=$(cat "./last_processed_sukisu_run_id.txt")
             echo "Cached (previously processed) run ID: $CACHED_RUN_ID"
           else
-            echo "No cached run ID found. This might be the first check or cache was cleared."
+            echo "No cached run ID found (cache miss or first run)."
           fi
 
           if [[ "$LATEST_EXTERNAL_RUN_ID" != "$CACHED_RUN_ID" ]]; then
             echo "New run detected. API ID: $LATEST_EXTERNAL_RUN_ID, Cached ID: $CACHED_RUN_ID"
             echo "new_run_detected=true" >> "$GITHUB_OUTPUT"
-            echo "$LATEST_EXTERNAL_RUN_ID" > ./last_processed_sukisu_run_id.txt
+            # 更新文件以便 actions/cache@v4 (启用了 save-always) 保存
+            echo "$LATEST_EXTERNAL_RUN_ID" > ./last_processed_sukisu_run_id.txt 
+            echo "Updated ./last_processed_sukisu_run_id.txt with $LATEST_EXTERNAL_RUN_ID"
           else
             echo "No new run detected. API ID ($LATEST_EXTERNAL_RUN_ID) is same as cached."
             echo "new_run_detected=false" >> "$GITHUB_OUTPUT"
+            # 如果没有新运行，并且缓存文件之前不存在（比如首次运行且API没取到有效ID，然后第二次API取到了），
+            # 且 LATEST_EXTERNAL_RUN_ID 也不是空的，那么这里可以“预填”一下缓存文件，以便 save-always 能保存它。
+            # 但更简单的是，如果文件未被修改，save-always:true 也会尝试保存已恢复的内容（如果之前有恢复的话）
+            # 或者如果文件是新创建的（如此处），也会保存。
+            # 关键是，当没有新运行时，不要去主动修改 last_processed_sukisu_run_id.txt 的内容（除非它是首次创建）。
             if [[ ! -f "./last_processed_sukisu_run_id.txt" && ! -z "$LATEST_EXTERNAL_RUN_ID" ]]; then
-               echo "Priming cache with current latest ID: $LATEST_EXTERNAL_RUN_ID"
+               echo "Priming cache file with current latest ID: $LATEST_EXTERNAL_RUN_ID as it did not exist."
+               echo "$LATEST_EXTERNAL_RUN_ID" > ./last_processed_sukisu_run_id.txt
+            elif [[ -f "./last_processed_sukisu_run_id.txt" && -z "$CACHED_RUN_ID" && ! -z "$LATEST_EXTERNAL_RUN_ID" ]]; then
+               # This case covers if the file existed but was empty, and we have a valid LATEST_EXTERNAL_RUN_ID
+               echo "Cache file was empty, updating with current latest ID: $LATEST_EXTERNAL_RUN_ID"
                echo "$LATEST_EXTERNAL_RUN_ID" > ./last_processed_sukisu_run_id.txt
             fi
           fi
+          # 注意: 当 new_run_detected=false 并且缓存文件已存在且内容与 LATEST_EXTERNAL_RUN_ID 一致时，
+          # last_processed_sukisu_run_id.txt 不会被修改。
+          # 此时 save-always: true 会重新保存这个未改变的文件，这是可以接受的。
 
   prepare_version:
     runs-on: ubuntu-latest
