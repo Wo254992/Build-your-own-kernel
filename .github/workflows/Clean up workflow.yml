@@ -1,0 +1,165 @@
+name: 清理失败和已取消的工作流运行记录
+
+on:
+  workflow_dispatch: # 保留手动触发
+    inputs:
+      days_to_keep:
+        description: '保留最近多少天的工作流运行记录？(输入 0 则会尝试删除所有符合条件的记录，除了最近的几个)'
+        required: true
+        type: number
+        default: 0
+      min_runs_to_keep_overall:
+        description: '无论日期和状态如何，至少保留最近多少个运行记录？(手动触发时若为0，则此特定保留逻辑不生效)'
+        required: true
+        type: number
+        default: 0 # 对于手动触发，如果希望此逻辑生效，建议用户输入 >0 的值
+      dry_run:
+        description: '是否空运行 (只列出要删除的，不实际删除)? true 或 false'
+        required: true
+        type: boolean
+        default: true # 手动触发时默认为空运行，更安全
+  schedule:
+    - cron: '0 3,15 * * *' # 每日 UTC 时间 03:00 自动触发一次
+
+permissions:
+  actions: write
+
+jobs:
+  cleanup_runs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 清理旧的、失败的、已取消的工作流运行
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # 根据触发类型设置参数值
+          # 对于 schedule 触发:
+          #   - DAYS_TO_KEEP 改为 0: 尝试清理所有符合条件的（日期不再是主要限制）
+          #   - 无论如何，至少保留最新的5条运行记录（所有状态）
+          #   - 实际执行删除 (DRY_RUN: false)
+          # 对于 workflow_dispatch 触发，使用用户输入的值
+          DAYS_TO_KEEP: ${{ github.event_name == 'workflow_dispatch' && inputs.days_to_keep || 0 }} # <--- 修改点：自动触发时，DAYS_TO_KEEP 默认为 0
+          MIN_RUNS_TO_KEEP_OVERALL: ${{ github.event_name == 'workflow_dispatch' && inputs.min_runs_to_keep_overall || 5 }} # 自动触发时，仍然至少保留最新的5条
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }} # 自动触发时，实际执行删除
+        run: |
+          set -e 
+          echo "工作流触发方式: ${{ github.event_name }}"
+          echo "开始清理工作流运行记录..."
+          echo "仓库: $REPO"
+          echo "保留天数参数(0表示不按日期限制): $DAYS_TO_KEEP"
+          echo "至少保留运行数参数: $MIN_RUNS_TO_KEEP_OVERALL"
+          echo "空运行模式: $DRY_RUN"
+
+          DAYS_TO_KEEP_INT=$(printf "%.0f" "$DAYS_TO_KEEP")
+          MIN_RUNS_TO_KEEP_OVERALL_INT=$(printf "%.0f" "$MIN_RUNS_TO_KEEP_OVERALL")
+
+          echo "处理后保留天数: $DAYS_TO_KEEP_INT"
+          echo "处理后至少保留运行数 (所有状态): $MIN_RUNS_TO_KEEP_OVERALL_INT"
+
+          STATUSES=("failure" "cancelled") 
+          RUN_IDS_TO_DELETE=()
+          cutoff_date_iso="" 
+
+          if [[ "$DAYS_TO_KEEP_INT" -gt 0 ]]; then
+            cutoff_date_iso=$(date -d "-$DAYS_TO_KEEP_INT days" -u --iso-8601=seconds)
+            echo "将尝试删除创建于 $cutoff_date_iso 之前，并且状态为 (${STATUSES[*]}) 的运行记录。"
+          else
+            echo "DAYS_TO_KEEP 为 0，将尝试删除所有符合状态 (${STATUSES[*]}) 的运行记录 (除了通过 MIN_RUNS_TO_KEEP_OVERALL_INT 保留的记录)。"
+          fi
+
+          for status_val in "${STATUSES[@]}"; do
+            echo "处理状态: $status_val"
+            
+            jq_query=".workflow_runs[]"
+
+            if [[ "$status_val" == "failure" ]]; then
+              jq_query+=" | select(.status==\"completed\" and .conclusion==\"failure\")"
+            elif [[ "$status_val" == "cancelled" ]]; then
+              jq_query+=" | select(.status==\"cancelled\")"
+            else
+              echo "未知的状态值: $status_val，跳过。"
+              continue 
+            fi
+
+            if [[ -n "$cutoff_date_iso" ]]; then
+              jq_query+=" | select(.created_at < \"$cutoff_date_iso\")"
+            fi
+            jq_query+=" | .id"
+
+            gh_api_command="gh api repos/${REPO}/actions/runs --paginate --jq '$jq_query'"
+            echo "执行 jq 查询: $gh_api_command"
+            
+            current_status_ids=()
+            mapfile -t current_status_ids < <(eval "$gh_api_command" || true) 
+            
+            if [[ ${#current_status_ids[@]} -eq 0 ]]; then
+              echo "在状态 $status_val 下没有找到符合日期条件的运行记录。"
+            else
+              echo "在状态 $status_val 下找到 ${#current_status_ids[@]} 个符合条件的运行记录ID。"
+              for run_id in "${current_status_ids[@]}"; do
+                RUN_IDS_TO_DELETE+=("$run_id")
+              done
+            fi
+          done
+          
+          mapfile -t UNIQUE_RUN_IDS_TO_DELETE < <(printf "%s\n" "${RUN_IDS_TO_DELETE[@]}" | sort -u)
+
+          echo "总共找到 ${#UNIQUE_RUN_IDS_TO_DELETE[@]} 个唯一的待处理运行记录ID（在日期和状态过滤后）。"
+
+          if [[ "$MIN_RUNS_TO_KEEP_OVERALL_INT" -gt 0 ]]; then
+            echo "正在获取最近 $MIN_RUNS_TO_KEEP_OVERALL_INT 个运行记录ID (所有状态) 以进行保留..."
+            mapfile -t recent_run_ids_to_always_keep < <(gh api repos/${REPO}/actions/runs --paginate --jq ".workflow_runs | sort_by(.created_at) | reverse | .[0:${MIN_RUNS_TO_KEEP_OVERALL_INT}] | .id" || true)
+            
+            if [[ ${#recent_run_ids_to_always_keep[@]} -gt 0 ]]; then
+                echo "以下最近 ${#recent_run_ids_to_always_keep[@]} 个运行记录ID将不会被删除: ${recent_run_ids_to_always_keep[*]}"
+                
+                temp_delete_list=()
+                for id_to_delete in "${UNIQUE_RUN_IDS_TO_DELETE[@]}"; do
+                  keep_this_id_due_to_overall_min=false
+                  for recent_id in "${recent_run_ids_to_always_keep[@]}"; do
+                    if [[ "$id_to_delete" == "$recent_id" ]]; then
+                      keep_this_id_due_to_overall_min=true
+                      break
+                    fi
+                  done
+                  if ! $keep_this_id_due_to_overall_min; then
+                    temp_delete_list+=("$id_to_delete")
+                  else
+                    echo "保留运行记录 ID $id_to_delete 因为它在最近 $MIN_RUNS_TO_KEEP_OVERALL_INT 个运行记录之内 (所有状态)。"
+                  fi
+                done
+                UNIQUE_RUN_IDS_TO_DELETE=("${temp_delete_list[@]}")
+                echo "在应用了 '至少保留运行数 (所有状态)' 规则后，有 ${#UNIQUE_RUN_IDS_TO_DELETE[@]} 个运行记录待删除。"
+            else
+                echo "未能获取到用于 '至少保留运行数' 规则的最近运行记录。"
+            fi
+          else
+            echo "MIN_RUNS_TO_KEEP_OVERALL_INT 为 0 或未设置，不应用 '至少保留运行数 (所有状态)' 规则。"
+          fi
+
+          if [[ ${#UNIQUE_RUN_IDS_TO_DELETE[@]} -eq 0 ]]; then
+            echo "没有需要删除的工作流运行记录。"
+          else
+            echo "准备删除以下 ${#UNIQUE_RUN_IDS_TO_DELETE[@]} 个运行记录ID: ${UNIQUE_RUN_IDS_TO_DELETE[*]}"
+            if [[ "$DRY_RUN" == "true" || "$DRY_RUN" == "True" ]]; then 
+              echo "空运行模式：不会实际删除任何记录。"
+            else
+              echo "开始实际删除..."
+              deleted_count=0
+              failed_to_delete_count=0
+              for run_id in "${UNIQUE_RUN_IDS_TO_DELETE[@]}"; do
+                echo "正在删除运行记录 ID: $run_id"
+                if gh api repos/${REPO}/actions/runs/${run_id} -X DELETE --silent; then 
+                  echo "成功删除运行记录 ID: $run_id"
+                  deleted_count=$((deleted_count + 1))
+                else
+                  echo "::warning:: 删除运行记录 ID: $run_id 失败。"
+                  failed_to_delete_count=$((failed_to_delete_count + 1))
+                fi
+                sleep 0.2
+              done
+              echo "删除操作完成。成功删除: $deleted_count 个。删除失败: $failed_to_delete_count 个。"
+            fi
+          fi
+
+          echo "工作流清理脚本执行完毕。"
