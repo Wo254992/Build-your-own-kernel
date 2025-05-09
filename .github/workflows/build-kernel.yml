@@ -63,7 +63,7 @@ jobs:
       version_type_default: '随机生成'
       custom_version_suffix_default: ''
       use_zram_default: 'true'  # 关键修改：布尔值转为字符串
-      use_kpm_default: 'false'  # 关键修改：布尔值转为字符串
+      use_kpm_default: 'true'  # 关键修改：布尔值转为字符串
     steps:
       - name: Restore last processed run ID from cache
         id: cache_restore_id
