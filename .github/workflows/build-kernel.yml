@@ -26,154 +26,61 @@ on:
           - Dev(开发)
           - Other(其他/指定)
         default: Dev(开发)
-      version_type:
-        description: "版本后缀生成方式"
-        required: true
-        type: choice
-        options:
-          - 自定义
-          - 随机生成
-        default: 随机生成
-      custom_version_suffix:
-        description: '若选"自定义",在此输入后缀'
+      version:
+        description: '自定义版本后缀，留空随机生成' # 更新了描述
         required: false
-        type: string
-        default: ""
+        type: string # 用户输入的是字符串
       use_zram:
         description: '是否开启增加更多ZRAM算法?'
         required: true
-        type: boolean
+        type: boolean # 输入是布尔型
         default: true
       use_kpm:
         description: '是否开启KPM功能?'
         required: true
-        type: boolean
+        type: boolean # 输入是布尔型
         default: true
-  schedule:
-    - cron: '*/30 * * * *'
 
 jobs:
-  check_external_updates:
+  prepare_version_string: # 新作业：准备版本字符串
     runs-on: ubuntu-latest
     outputs:
-      new_run_detected: ${{ steps.check.outputs.new_run_detected }}
-      latest_external_run_id: ${{ steps.check.outputs.latest_external_run_id }}
-      kernelsu_variant_default: 'SukiSU'
-      kernelsu_branch_default: 'Dev(开发)'
-      version_type_default: '随机生成'
-      custom_version_suffix_default: ''
-      use_zram_default: 'true' 
-      use_kpm_default: 'false' 
+      final_version: ${{ steps.generate_version.outputs.version_string }} # 输出的变量名
     steps:
-      - name: Manage last processed run ID cache # 可以稍微改下名字，更清晰
-        id: cache_run_id # ID也可以改得更明确
-        uses: actions/cache@v4
-        with:
-          path: ./last_processed_sukisu_run_id.txt
-          key: latest-processed-sukisu-run-id
-          save-always: true # <--- 关键添加：确保即使主键命中，如果文件内容改变或需要保存时，也会尝试保存
-
-      - name: Check for new successful run in ShirkNeko/SukiSU-Ultra
-        id: check
+      - name: Generate or Use Custom Version String
+        id: generate_version
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET_REPO: ShirkNeko/SukiSU-Ultra
-          TARGET_WORKFLOW_FILE: build-manager.yml
+          # 从 workflow_dispatch 的 inputs 中获取用户输入的 version
+          USER_PROVIDED_VERSION: ${{ github.event.inputs.version }}
         run: |
-          set -e
-          echo "Fetching latest successful workflow run for $TARGET_WORKFLOW_FILE from $TARGET_REPO (event: push)"
-          API_RESPONSE=$(gh api "repos/$TARGET_REPO/actions/workflows/$TARGET_WORKFLOW_FILE/runs?status=success&event=push&per_page=1")
-          LATEST_EXTERNAL_RUN_ID=$(echo "$API_RESPONSE" | jq -r '.workflow_runs[0].id // ""')
-
-          if [[ -z "$LATEST_EXTERNAL_RUN_ID" || "$LATEST_EXTERNAL_RUN_ID" == "null" ]]; then
-            echo "No successful 'push' event runs found in $TARGET_REPO/$TARGET_WORKFLOW_FILE or API error."
-            echo "new_run_detected=false" >> "$GITHUB_OUTPUT"
-            echo "latest_external_run_id=" >> "$GITHUB_OUTPUT"
-            # 如果没有获取到远程ID，且本地缓存文件存在，不要去修改本地缓存文件，让它保持原样
-            # 如果本地缓存文件不存在，也不需要创建空的，避免不必要的缓存保存
-            exit 0 
-          fi
-
-          echo "Latest external run ID from API: $LATEST_EXTERNAL_RUN_ID"
-          echo "latest_external_run_id=$LATEST_EXTERNAL_RUN_ID" >> "$GITHUB_OUTPUT"
-
-          CACHED_RUN_ID=""
-          # 尝试读取缓存文件，如果不存在，CACHED_RUN_ID 会是空
-          if [[ -f "./last_processed_sukisu_run_id.txt" ]]; then
-            CACHED_RUN_ID=$(cat "./last_processed_sukisu_run_id.txt")
-            echo "Cached (previously processed) run ID: $CACHED_RUN_ID"
+          VERSION_TO_USE=""
+          if [[ -n "$USER_PROVIDED_VERSION" ]]; then
+            # 如果用户提供了 version 输入，则直接使用它
+            echo "使用用户提供的版本字符串: $USER_PROVIDED_VERSION"
+            VERSION_TO_USE="$USER_PROVIDED_VERSION"
           else
-            echo "No cached run ID found (cache miss or first run)."
-          fi
-
-          if [[ "$LATEST_EXTERNAL_RUN_ID" != "$CACHED_RUN_ID" ]]; then
-            echo "New run detected. API ID: $LATEST_EXTERNAL_RUN_ID, Cached ID: $CACHED_RUN_ID"
-            echo "new_run_detected=true" >> "$GITHUB_OUTPUT"
-            # 更新文件以便 actions/cache@v4 (启用了 save-always) 保存
-            echo "$LATEST_EXTERNAL_RUN_ID" > ./last_processed_sukisu_run_id.txt 
-            echo "Updated ./last_processed_sukisu_run_id.txt with $LATEST_EXTERNAL_RUN_ID"
-          else
-            echo "No new run detected. API ID ($LATEST_EXTERNAL_RUN_ID) is same as cached."
-            echo "new_run_detected=false" >> "$GITHUB_OUTPUT"
-            # 如果没有新运行，并且缓存文件之前不存在（比如首次运行且API没取到有效ID，然后第二次API取到了），
-            # 且 LATEST_EXTERNAL_RUN_ID 也不是空的，那么这里可以“预填”一下缓存文件，以便 save-always 能保存它。
-            # 但更简单的是，如果文件未被修改，save-always:true 也会尝试保存已恢复的内容（如果之前有恢复的话）
-            # 或者如果文件是新创建的（如此处），也会保存。
-            # 关键是，当没有新运行时，不要去主动修改 last_processed_sukisu_run_id.txt 的内容（除非它是首次创建）。
-            if [[ ! -f "./last_processed_sukisu_run_id.txt" && ! -z "$LATEST_EXTERNAL_RUN_ID" ]]; then
-               echo "Priming cache file with current latest ID: $LATEST_EXTERNAL_RUN_ID as it did not exist."
-               echo "$LATEST_EXTERNAL_RUN_ID" > ./last_processed_sukisu_run_id.txt
-            elif [[ -f "./last_processed_sukisu_run_id.txt" && -z "$CACHED_RUN_ID" && ! -z "$LATEST_EXTERNAL_RUN_ID" ]]; then
-               # This case covers if the file existed but was empty, and we have a valid LATEST_EXTERNAL_RUN_ID
-               echo "Cache file was empty, updating with current latest ID: $LATEST_EXTERNAL_RUN_ID"
-               echo "$LATEST_EXTERNAL_RUN_ID" > ./last_processed_sukisu_run_id.txt
-            fi
-          fi
-          # 注意: 当 new_run_detected=false 并且缓存文件已存在且内容与 LATEST_EXTERNAL_RUN_ID 一致时，
-          # last_processed_sukisu_run_id.txt 不会被修改。
-          # 此时 save-always: true 会重新保存这个未改变的文件，这是可以接受的。
-
-  prepare_version:
-    runs-on: ubuntu-latest
-    outputs:
-      version_suffix_value: ${{ steps.version_generator.outputs.version_value }}
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && needs.check_external_updates.outputs.new_run_detected == 'true')
-    needs: [check_external_updates] 
-    env:
-      INPUT_VERSION_TYPE: ${{ github.event_name == 'workflow_dispatch' && inputs.version_type || needs.check_external_updates.outputs.version_type_default }}
-      INPUT_CUSTOM_SUFFIX: ${{ github.event_name == 'workflow_dispatch' && inputs.custom_version_suffix || needs.check_external_updates.outputs.custom_version_suffix_default }}
-    steps:
-      - name: Generate Version Suffix
-        id: version_generator
-        shell: bash
-        run: |
-          set -x
-          VERSION_OUTPUT=""
-          if [[ "$INPUT_VERSION_TYPE" == "自定义" ]]; then
-            VERSION_OUTPUT="$INPUT_CUSTOM_SUFFIX"
-          elif [[ "$INPUT_VERSION_TYPE" == "随机生成" ]]; then
+            # 如果用户未提供 version 输入，则生成随机版本字符串
+            echo "未提供版本字符串，正在生成随机版本字符串..."
             FIXED_PART="-android14-11"
             PREFIX1="gd"
             PREFIX2="ab"
-            RANDOM_HEX=$( (LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 11 | cat) || true )
-            RANDOM_DIGITS=$( (LC_ALL=C tr -dc '0-9' < /dev/urandom | head -c 8 | cat) || true )
-            VERSION_OUTPUT="${FIXED_PART}-${PREFIX1}${RANDOM_HEX}-${PREFIX2}${RANDOM_DIGITS}"
-          else
-            VERSION_OUTPUT=""
+            # 生成11位随机十六进制字符 (a-f, 0-9)
+            RANDOM_HEX=$(head /dev/urandom | LC_ALL=C tr -dc 'a-f0-9' | head -c 11 || true)
+            # 生成8位随机数字 (0-9)
+            RANDOM_DIGITS=$(head /dev/urandom | LC_ALL=C tr -dc '0-9' | head -c 8 || true)
+            VERSION_TO_USE="${FIXED_PART}-${PREFIX1}${RANDOM_HEX}-${PREFIX2}${RANDOM_DIGITS}"
+            echo "生成的随机版本字符串: $VERSION_TO_USE"
           fi
-          echo "Generated version suffix: ${VERSION_OUTPUT}"
-          echo "version_value=${VERSION_OUTPUT}" >> "$GITHUB_OUTPUT"
+          echo "version_string=${VERSION_TO_USE}" >> "$GITHUB_OUTPUT"
 
-  build_kernel: 
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && needs.check_external_updates.outputs.new_run_detected == 'true')
-    needs: [check_external_updates, prepare_version] 
+  build-kernel-a14-6-1:
+    needs: [prepare_version_string] # <--- 依赖 prepare_version_string 作业
     uses: ./.github/workflows/kernel-a14-6.1.yml
     secrets: inherit
     with:
-      make_release: false 
-      kernelsu_variant: ${{ github.event_name == 'workflow_dispatch' && inputs.kernelsu_variant || needs.check_external_updates.outputs.kernelsu_variant_default }}
-      kernelsu_branch: ${{ github.event_name == 'workflow_dispatch' && inputs.kernelsu_branch || needs.check_external_updates.outputs.kernelsu_branch_default }}
-      version: ${{ needs.prepare_version.outputs.version_suffix_value }}
-      # 关键修复：调整管道符位置和表达式结构
-      use_zram: ${{ format('{0}', (github.event_name == 'workflow_dispatch' && inputs.use_zram) || (github.event_name == 'schedule' && needs.check_external_updates.outputs.use_zram_default == 'true')) }}
-      use_kpm: ${{ format('{0}', (github.event_name == 'workflow_dispatch' && inputs.use_kpm) || (github.event_name == 'schedule' && needs.check_external_updates.outputs.use_kpm_default == 'true')) }}
+      make_release: false
+      kernelsu_variant: ${{ inputs.kernelsu_variant }}
+      kernelsu_branch: ${{ inputs.kernelsu_branch }}
+      version: ${{ needs.prepare_version_string.outputs.final_version }} # <--- 使用上一个作业生成的版本字符串
+      use_zram: ${{ inputs.use_zram }} # <--- 直接传递布尔值
+      use_kpm: ${{ inputs.use_kpm }}   # <--- 直接传递布尔值
