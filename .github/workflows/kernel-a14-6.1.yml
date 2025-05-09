@@ -26,12 +26,12 @@ on:
         description: '是否开启增加更多ZRAM算法?'
         required: true
         type: string
-        default: "true"
+        default: true
       use_kpm:
         description: '是否开启KPM功能?'
         required: true
         type: string
-        default: "true"
+        default: true
 
 jobs:
   build-kernel-a14-6-1-kernelsu-susfs:
