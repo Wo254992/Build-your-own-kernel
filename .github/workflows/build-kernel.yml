@@ -1,0 +1,161 @@
+name: A编译内核
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernelsu_variant:
+        description: "选择 KernelSU"
+        required: true
+        type: choice
+        options:
+          - Official
+          - Next
+          - MKSU
+          - SukiSU
+        default: SukiSU
+      kernelsu_branch:
+        description: "选择 ksu 分支"
+        required: true
+        type: choice
+        options:
+          - Stable(标准)
+          - Dev(开发)
+          - Other(其他/指定)
+        default: Dev(开发)
+      version_type:
+        description: "版本后缀生成方式"
+        required: true
+        type: choice
+        options:
+          - 自定义
+          - 随机生成
+        default: 随机生成
+      custom_version_suffix:
+        description: '若选"自定义",在此输入后缀'
+        required: false
+        type: string
+        default: ""
+      use_zram:
+        description: '是否开启增加更多ZRAM算法?'
+        required: true
+        type: boolean
+        default: true
+      use_kpm:
+        description: '是否开启KPM功能?'
+        required: true
+        type: boolean
+        default: true
+  schedule:
+    - cron: '*/30 * * * *'
+
+jobs:
+  check_external_updates:
+    runs-on: ubuntu-latest
+    outputs:
+      new_run_detected: ${{ steps.check.outputs.new_run_detected }}
+      latest_external_run_id: ${{ steps.check.outputs.latest_external_run_id }}
+      kernelsu_variant_default: 'SukiSU'
+      kernelsu_branch_default: 'Dev(开发)'
+      version_type_default: '随机生成'
+      custom_version_suffix_default: ''
+      use_zram_default: 'true'  # 关键修改：布尔值转为字符串
+      use_kpm_default: 'false'  # 关键修改：布尔值转为字符串
+    steps:
+      - name: Restore last processed run ID from cache
+        id: cache_restore_id
+        uses: actions/cache@v4
+        with:
+          path: ./last_processed_sukisu_run_id.txt
+          key: latest-processed-sukisu-run-id
+
+      - name: Check for new successful run in ShirkNeko/SukiSU-Ultra
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REPO: ShirkNeko/SukiSU-Ultra
+          TARGET_WORKFLOW_FILE: build-manager.yml
+        run: |
+          set -e
+          echo "Fetching latest successful workflow run for $TARGET_WORKFLOW_FILE from $TARGET_REPO (event: push)"
+          API_RESPONSE=$(gh api "repos/$TARGET_REPO/actions/workflows/$TARGET_WORKFLOW_FILE/runs?status=success&event=push&per_page=1")
+          LATEST_EXTERNAL_RUN_ID=$(echo "$API_RESPONSE" | jq -r '.workflow_runs[0].id // ""')
+
+          if [[ -z "$LATEST_EXTERNAL_RUN_ID" || "$LATEST_EXTERNAL_RUN_ID" == "null" ]]; then
+            echo "No successful 'push' event runs found in $TARGET_REPO/$TARGET_WORKFLOW_FILE or API error."
+            echo "new_run_detected=false" >> "$GITHUB_OUTPUT"
+            echo "latest_external_run_id=" >> "$GITHUB_OUTPUT"
+            exit 0 
+          fi
+
+          echo "Latest external run ID from API: $LATEST_EXTERNAL_RUN_ID"
+          echo "latest_external_run_id=$LATEST_EXTERNAL_RUN_ID" >> "$GITHUB_OUTPUT"
+
+          CACHED_RUN_ID=""
+          if [[ -f "./last_processed_sukisu_run_id.txt" ]]; then
+            CACHED_RUN_ID=$(cat "./last_processed_sukisu_run_id.txt")
+            echo "Cached (previously processed) run ID: $CACHED_RUN_ID"
+          else
+            echo "No cached run ID found. This might be the first check or cache was cleared."
+          fi
+
+          if [[ "$LATEST_EXTERNAL_RUN_ID" != "$CACHED_RUN_ID" ]]; then
+            echo "New run detected. API ID: $LATEST_EXTERNAL_RUN_ID, Cached ID: $CACHED_RUN_ID"
+            echo "new_run_detected=true" >> "$GITHUB_OUTPUT"
+            echo "$LATEST_EXTERNAL_RUN_ID" > ./last_processed_sukisu_run_id.txt
+          else
+            echo "No new run detected. API ID ($LATEST_EXTERNAL_RUN_ID) is same as cached."
+            echo "new_run_detected=false" >> "$GITHUB_OUTPUT"
+            if [[ ! -f "./last_processed_sukisu_run_id.txt" && ! -z "$LATEST_EXTERNAL_RUN_ID" ]]; then
+               echo "Priming cache with current latest ID: $LATEST_EXTERNAL_RUN_ID"
+               echo "$LATEST_EXTERNAL_RUN_ID" > ./last_processed_sukisu_run_id.txt
+            fi
+          fi
+
+  prepare_version:
+    runs-on: ubuntu-latest
+    outputs:
+      version_suffix_value: ${{ steps.version_generator.outputs.version_value }}
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && needs.check_external_updates.outputs.new_run_detected == 'true')
+    needs: [check_external_updates] 
+    env:
+      INPUT_VERSION_TYPE: ${{ github.event_name == 'workflow_dispatch' && inputs.version_type || needs.check_external_updates.outputs.version_type_default }}
+      INPUT_CUSTOM_SUFFIX: ${{ github.event_name == 'workflow_dispatch' && inputs.custom_version_suffix || needs.check_external_updates.outputs.custom_version_suffix_default }}
+    steps:
+      - name: Generate Version Suffix
+        id: version_generator
+        shell: bash
+        run: |
+          set -x
+          VERSION_OUTPUT=""
+          if [[ "$INPUT_VERSION_TYPE" == "自定义" ]]; then
+            VERSION_OUTPUT="$INPUT_CUSTOM_SUFFIX"
+          elif [[ "$INPUT_VERSION_TYPE" == "随机生成" ]]; then
+            FIXED_PART="-android14-11"
+            PREFIX1="gd"
+            PREFIX2="ab"
+            RANDOM_HEX=$( (LC_ALL=C tr -dc 'a-f0-9' < /dev/urandom | head -c 11 | cat) || true )
+            RANDOM_DIGITS=$( (LC_ALL=C tr -dc '0-9' < /dev/urandom | head -c 8 | cat) || true )
+            VERSION_OUTPUT="${FIXED_PART}-${PREFIX1}${RANDOM_HEX}-${PREFIX2}${RANDOM_DIGITS}"
+          else
+            VERSION_OUTPUT=""
+          fi
+          echo "Generated version suffix: ${VERSION_OUTPUT}"
+          echo "version_value=${VERSION_OUTPUT}" >> "$GITHUB_OUTPUT"
+
+  build_kernel: 
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && needs.check_external_updates.outputs.new_run_detected == 'true')
+    needs: [check_external_updates, prepare_version] 
+    uses: ./.github/workflows/kernel-a14-6.1.yml
+    secrets: inherit
+    with:
+      make_release: false 
+      kernelsu_variant: ${{ github.event_name == 'workflow_dispatch' && inputs.kernelsu_variant || needs.check_external_updates.outputs.kernelsu_variant_default }}
+      kernelsu_branch: ${{ github.event_name == 'workflow_dispatch' && inputs.kernelsu_branch || needs.check_external_updates.outputs.kernelsu_branch_default }}
+      version: ${{ needs.prepare_version.outputs.version_suffix_value }}
+      # 关键修复：调整管道符位置和表达式结构
+      use_zram: ${{ format('{0}', (github.event_name == 'workflow_dispatch' && inputs.use_zram) || (github.event_name == 'schedule' && needs.check_external_updates.outputs.use_zram_default == 'true')) }}
+      use_kpm: ${{ format('{0}', (github.event_name == 'workflow_dispatch' && inputs.use_kpm) || (github.event_name == 'schedule' && needs.check_external_updates.outputs.use_kpm_default == 'true')) }}
