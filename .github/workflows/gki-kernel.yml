@@ -39,11 +39,11 @@ on:
         type: string
       use_zram:
         required: true
-        type: string
+        type: boolean
         default: true
       use_kpm:
         required: true
-        type: string
+        type: boolean
         default: true
 
 jobs:
