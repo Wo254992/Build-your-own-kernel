@@ -1,0 +1,206 @@
+name: A编译内核
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      # 内核版本选择 (独立开关)
+      build_a12_510:
+        description: "编译 Android 12 (5.10) 内核?"
+        required: true
+        type: boolean
+        default: false
+      build_a13_510:
+        description: "编译 Android 13 (5.10) 内核?"
+        required: true
+        type: boolean
+        default: false
+      build_a13_515:
+        description: "编译 Android 13 (5.15) 内核?"
+        required: true
+        type: boolean
+        default: false
+      build_a14_61:
+        description: "编译 Android 14 (6.1) 内核?"
+        required: true
+        type: boolean
+        default: true # 默认编译 A14
+      build_a15_66:
+        description: "编译 Android 15 (6.6) 内核?"
+        required: true
+        type: boolean
+        default: false
+
+      # KernelSU 选项
+      kernelsu_variant:
+        description: "选择 KernelSU 变体"
+        required: true
+        type: choice
+        options:
+          - Official
+          - Next
+          - MKSU
+          - SukiSU
+        default: SukiSU
+      kernelsu_branch:
+        description: "选择 KSU 分支"
+        required: true
+        type: choice
+        options:
+          - Stable(标准)
+          - Dev(开发)
+          - Other(其他/指定)
+        default: Dev(开发)
+
+      # 自定义选项
+      version: # 保留原始名称 version
+        description: '自定义内核版本后缀 (留空则随机生成，应用于所有选定内核)'
+        required: false
+        type: string # 用户输入的是字符串
+      use_zram:
+        description: '是否开启增加更多ZRAM算法?'
+        required: true
+        type: boolean # 输入是布尔型
+        default: true
+      use_kpm:
+        description: '是否开启KPM功能?'
+        required: true
+        type: boolean # 输入是布尔型
+        default: true
+
+jobs:
+  # --- 准备所有可能的版本号 ---
+  prepare_versions:
+    name: 准备版本号
+    runs-on: ubuntu-latest
+    outputs: # 定义此作业的输出
+      version_a12_510: ${{ steps.generate.outputs.version_a12_510 }}
+      version_a13_510: ${{ steps.generate.outputs.version_a13_510 }}
+      version_a13_515: ${{ steps.generate.outputs.version_a13_515 }}
+      version_a14_61: ${{ steps.generate.outputs.version_a14_61 }}
+      version_a15_66: ${{ steps.generate.outputs.version_a15_66 }}
+    steps:
+      - name: 生成所有可能的版本字符串
+        id: generate
+        env:
+          USER_PROVIDED_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          generate_version() {
+            local fixed_part="$1"
+            local version_name="$2"
+            local version_to_use=""
+
+            if [[ -n "$USER_PROVIDED_VERSION" ]]; then
+              version_to_use="$USER_PROVIDED_VERSION"
+            else
+              local prefix1="gd"
+              local prefix2="ab"
+              local random_hex=$(head /dev/urandom | LC_ALL=C tr -dc 'a-f0-9' | head -c 11 || true)
+              local random_digits=$(head /dev/urandom | LC_ALL=C tr -dc '0-9' | head -c 8 || true)
+              version_to_use="${fixed_part}-${prefix1}${random_hex}-${prefix2}${random_digits}"
+            fi
+            echo "${version_name}=${version_to_use}" >> "$GITHUB_OUTPUT"
+          }
+          generate_version "-android12-9" "version_a12_510"
+          generate_version "-android13-9" "version_a13_510"
+          generate_version "-android13-8" "version_a13_515"
+          generate_version "-android14-11" "version_a14_61"
+          generate_version "-android15-8" "version_a15_66"
+
+  # --- 调试输入的作业 (可选，可以保留或移除) ---
+  debug_inputs:
+    name: 调试输入值
+    runs-on: ubuntu-latest
+    needs: [prepare_versions]
+    steps:
+      - name: 打印输入的布尔值
+        run: |
+          echo "Input build_a12_510: '${{ github.event.inputs.build_a12_510 }}'"
+          echo "Input build_a13_510: '${{ github.event.inputs.build_a13_510 }}'"
+          echo "Input build_a13_515: '${{ github.event.inputs.build_a13_515 }}'"
+          echo "Input build_a14_61: '${{ github.event.inputs.build_a14_61 }}'"
+          echo "Input build_a15_66: '${{ github.event.inputs.build_a15_66 }}'"
+          echo "Input version (custom suffix): '${{ github.event.inputs.version }}'"
+
+  # --- 调用 A12 5.10 可重用工作流 ---
+  build_a12_510:
+    name: Build Kernel A12 5.10
+    needs: [prepare_versions, debug_inputs] # 保持依赖 debug_inputs (如果保留了该作业)
+    # 修改 if 条件: 显式比较字符串 'true'
+    if: github.event.inputs.build_a12_510 == 'true'
+    uses: ./.github/workflows/kernel-a12-5.10.yml
+    secrets: inherit
+    with:
+      make_release: false
+      kernelsu_variant: ${{ inputs.kernelsu_variant }}
+      kernelsu_branch: ${{ inputs.kernelsu_branch }}
+      version: ${{ needs.prepare_versions.outputs.version_a12_510 }}
+      use_zram: ${{ inputs.use_zram }}
+      use_kpm: ${{ inputs.use_kpm }}
+
+  # --- 调用 A13 5.10 可重用工作流 ---
+  build_a13_510:
+    name: Build Kernel A13 5.10
+    needs: [prepare_versions, debug_inputs]
+    # 修改 if 条件:
+    if: github.event.inputs.build_a13_510 == 'true'
+    uses: ./.github/workflows/kernel-a13-5.10.yml
+    secrets: inherit
+    with:
+      make_release: false
+      kernelsu_variant: ${{ inputs.kernelsu_variant }}
+      kernelsu_branch: ${{ inputs.kernelsu_branch }}
+      version: ${{ needs.prepare_versions.outputs.version_a13_510 }}
+      use_zram: ${{ inputs.use_zram }}
+      use_kpm: ${{ inputs.use_kpm }}
+
+  # --- 调用 A13 5.15 可重用工作流 ---
+  build_a13_515:
+    name: Build Kernel A13 5.15
+    needs: [prepare_versions, debug_inputs]
+    # 修改 if 条件:
+    if: github.event.inputs.build_a13_515 == 'true'
+    uses: ./.github/workflows/kernel-a13-5.15.yml
+    secrets: inherit
+    with:
+      make_release: false
+      kernelsu_variant: ${{ inputs.kernelsu_variant }}
+      kernelsu_branch: ${{ inputs.kernelsu_branch }}
+      version: ${{ needs.prepare_versions.outputs.version_a13_515 }}
+      use_zram: ${{ inputs.use_zram }}
+      use_kpm: ${{ inputs.use_kpm }}
+
+  # --- 调用 A14 6.1 可重用工作流 ---
+  build_a14_61:
+    name: Build Kernel A14 6.1
+    needs: [prepare_versions, debug_inputs]
+    # 修改 if 条件:
+    if: github.event.inputs.build_a14_61 == 'true'
+    uses: ./.github/workflows/kernel-a14-6.1.yml
+    secrets: inherit
+    with:
+      make_release: false
+      kernelsu_variant: ${{ inputs.kernelsu_variant }}
+      kernelsu_branch: ${{ inputs.kernelsu_branch }}
+      version: ${{ needs.prepare_versions.outputs.version_a14_61 }}
+      use_zram: ${{ inputs.use_zram }}
+      use_kpm: ${{ inputs.use_kpm }}
+
+  # --- 调用 A15 6.6 可重用工作流 ---
+  build_a15_66:
+    name: Build Kernel A15 6.6
+    needs: [prepare_versions, debug_inputs]
+    # 修改 if 条件:
+    if: github.event.inputs.build_a15_66 == 'true'
+    uses: ./.github/workflows/kernel-a15-6.6.yml
+    secrets: inherit
+    with:
+      make_release: false
+      kernelsu_variant: ${{ inputs.kernelsu_variant }}
+      kernelsu_branch: ${{ inputs.kernelsu_branch }}
+      version: ${{ needs.prepare_versions.outputs.version_a15_66 }}
+      use_zram: ${{ inputs.use_zram }}
+      use_kpm: ${{ inputs.use_kpm }}
