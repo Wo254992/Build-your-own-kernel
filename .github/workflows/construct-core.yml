@@ -1,4 +1,4 @@
-name: A编译内核
+name: A编译内核test
 
 permissions:
   contents: write
