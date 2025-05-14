@@ -129,4 +129,26 @@ jobs:
                     if git push origin HEAD:${{ github.ref_name }}; then
                       echo "成功推送更新后的版本文件。"
                       break
-    
+                    else
+                      echo "推送尝试 $i 失败。10秒后重试..."
+                      git fetch origin
+                      git rebase origin/${{ github.ref_name }} || (echo "Rebase 失败，可能存在冲突，正在中止 Rebase" && git rebase --abort && sleep 1 && false) # 增加 sleep 避免快速循环中的 rebase 状态问题
+                      sleep 10
+                    fi
+                    if [ $i -eq 3 ]; then
+                      echo "::error::多次尝试后，推送更新后的版本文件失败。请检查权限或仓库状态。"
+                      exit 1 
+                    fi
+                  done
+                fi
+              else
+                echo "版本未实际更新 (例如，由于是强制触发且版本号不高，或版本号与上次相同)。不更新版本记录文件。"
+              fi
+            else
+              echo "::error::发送触发命令给 'A编译内核' 工作流失败。"
+              exit 1 # 如果触发下游失败，也应该报错
+            fi
+          else
+            echo "最终决定：不触发下游内核编译。" # 涵盖了版本未更新且未强制触发的情况
+          fi
+          echo "SukiSU 版本检查和触发流程结束。"
