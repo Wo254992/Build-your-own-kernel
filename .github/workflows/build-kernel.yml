@@ -23,11 +23,16 @@ on:
         required: true
         type: boolean
         default: false
+      build_a14_515: # 新增 A14 5.15 内核选项
+        description: "编译 Android 14 (5.15) 内核?"
+        required: true
+        type: boolean
+        default: false
       build_a14_61:
         description: "编译 Android 14 (6.1) 内核?"
         required: true
         type: boolean
-        default: true # 默认编译 A14
+        default: true # 默认编译 A14 6.1
       build_a15_66:
         description: "编译 Android 15 (6.6) 内核?"
         required: true
@@ -80,6 +85,7 @@ jobs:
       version_a12_510: ${{ steps.generate.outputs.version_a12_510 }}
       version_a13_510: ${{ steps.generate.outputs.version_a13_510 }}
       version_a13_515: ${{ steps.generate.outputs.version_a13_515 }}
+      version_a14_515: ${{ steps.generate.outputs.version_a14_515 }} # 新增 A14 5.15 版本输出
       version_a14_61: ${{ steps.generate.outputs.version_a14_61 }}
       version_a15_66: ${{ steps.generate.outputs.version_a15_66 }}
     steps:
@@ -107,6 +113,7 @@ jobs:
           generate_version "-android12-9" "version_a12_510"
           generate_version "-android13-9" "version_a13_510"
           generate_version "-android13-8" "version_a13_515"
+          generate_version "-android14-5.15" "version_a14_515" # 新增 A14 5.15 版本生成规则
           generate_version "-android14-11" "version_a14_61"
           generate_version "-android15-8" "version_a15_66"
 
@@ -121,6 +128,7 @@ jobs:
           echo "Input build_a12_510: '${{ github.event.inputs.build_a12_510 }}'"
           echo "Input build_a13_510: '${{ github.event.inputs.build_a13_510 }}'"
           echo "Input build_a13_515: '${{ github.event.inputs.build_a13_515 }}'"
+          echo "Input build_a14_515: '${{ github.event.inputs.build_a14_515 }}'" # 新增 A14 5.15 输入调试
           echo "Input build_a14_61: '${{ github.event.inputs.build_a14_61 }}'"
           echo "Input build_a15_66: '${{ github.event.inputs.build_a15_66 }}'"
           echo "Input version (custom suffix): '${{ github.event.inputs.version }}'"
@@ -170,6 +178,21 @@ jobs:
       kernelsu_variant: ${{ inputs.kernelsu_variant }}
       kernelsu_branch: ${{ inputs.kernelsu_branch }}
       version: ${{ needs.prepare_versions.outputs.version_a13_515 }}
+      use_zram: ${{ inputs.use_zram }}
+      use_kpm: ${{ inputs.use_kpm }}
+
+  # --- 新增: 调用 A14 5.15 可重用工作流 ---
+  build_a14_515:
+    name: Build Kernel A14 5.15
+    needs: [prepare_versions, debug_inputs]
+    if: github.event.inputs.build_a14_515 == 'true'
+    uses: ./.github/workflows/kernel-a14-5.15.yml # 调用新的工作流文件
+    secrets: inherit
+    with:
+      make_release: false
+      kernelsu_variant: ${{ inputs.kernelsu_variant }}
+      kernelsu_branch: ${{ inputs.kernelsu_branch }}
+      version: ${{ needs.prepare_versions.outputs.version_a14_515 }}
       use_zram: ${{ inputs.use_zram }}
       use_kpm: ${{ inputs.use_kpm }}
 
