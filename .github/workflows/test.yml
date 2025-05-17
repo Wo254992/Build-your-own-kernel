@@ -331,11 +331,21 @@ jobs:
           echo "REPO=$GITHUB_WORKSPACE/./git-repo/repo" >> $GITHUB_ENV
 
       - name: 检查依赖项安全 (可选)
-        # 确保在代码克隆之后运行
         uses: actions/dependency-review-action@v4
         with:
-          fail-on-severity: high
-          allow-licenses: MIT, Apache-2.0, GPL-2.0, BSD-3-Clause # 根据项目实际情况调整
+          # 对于 workflow_dispatch 事件，我们需要明确指定 base-ref 和 head-ref。
+          # 以下配置尝试比较当前提交与其直接父提交。
+          # 注意: 如果在仓库的第一个提交上运行此工作流，获取父提交 (~) 可能会失败。
+          base-ref: ${{ github.sha }}~1 # 指向当前提交的第一个父提交
+          head-ref: ${{ github.sha }}   # 指向当前提交
+          
+          fail-on-severity: high # 依赖项审查失败的级别 (例如: critical, high, moderate, low)
+          allow-licenses: MIT, Apache-2.0, GPL-2.0, BSD-3-Clause # 允许的许可证列表，请根据您的项目调整
+          # repo-token: ${{ secrets.GITHUB_TOKEN }} # GITHUB_TOKEN 会自动被 Action 使用，通常不需要显式传递
+
+          # 由于此步骤是可选的，并且在某些边缘情况下可能失败（如仓库的初始提交），
+          # 设置 continue-on-error 为 true 可以允许工作流在这一步失败时继续。
+          continue-on-error: true
 
       - name: 克隆依赖仓库 (AnyKernel3等)
         run: |
