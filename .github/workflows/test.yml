@@ -1,0 +1,1093 @@
+name: A内核编译
+permissions:
+  contents: write
+  actions: write
+
+# 新增：并发控制，防止同一分支的多个编译任务同时运行
+concurrency:
+  group: kernel-build-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_to_build:
+        description: "选择内核版本"
+        required: true
+        type: choice
+        options:
+          - "android12_5.10_168_2023-04_r9"
+          - "android12_5.10_198_2024-01_r17"
+          - "android12_5.10_205_2024-03_r9"
+          - "android12_5.10_209_2024-05_r13"
+          - "android12_5.10_218_2024-08_r14"
+          - "android12_5.10_226_2024-11_r8"
+          - "android12_5.10_233_2025-02_r1"
+          - "android12_5.10_X_lts_r1"
+          - "android13_5.10_198_2024-01_"
+          - "android13_5.10_205_2024-03_"
+          - "android13_5.10_209_2024-05_"
+          - "android13_5.10_214_2024-07_"
+          - "android13_5.10_218_2024-08_"
+          - "android13_5.10_223_2024-11_"
+          - "android13_5.10_228_2025-01_"
+          - "android13_5.10_X_lts_"
+          - "android13_5.15_123_2023-11_"
+          - "android13_5.15_137_2024-01_"
+          - "android13_5.15_144_2024-03_"
+          - "android13_5.15_148_2024-05_"
+          - "android13_5.15_151_2024-08_"
+          - "android13_5.15_167_2024-11_"
+          - "android13_5.15_170_2025-01_"
+          - "android13_5.15_X_lts_"
+          - "android14_5.15_131_2023-11_"
+          - "android14_5.15_137_2024-01_"
+          - "android14_5.15_144_2024-03_"
+          - "android14_5.15_148_2024-05_"
+          - "android14_5.15_149_2024-06_"
+          - "android14_5.15_153_2024-07_"
+          - "android14_5.15_158_2024-08_"
+          - "android14_5.15_167_2024-11_"
+          - "android14_5.15_170_2025-01_"
+          - "android14_6.1_75_2024-05_"
+          - "android15_6.6_50_2024-10_"
+          - "android15_6.6_56_2024-11_"
+          - "android15_6.6_57_2024-12_"
+          - "android15_6.6_58_2025-01_"
+          - "android15_6.6_66_2025-02_"
+          - "android15_6.6_77_2025-03_"
+          - "android15_6.6_X_lts_"
+        default: "android14_6.1_75_2024-05_"
+      kernelsu_branch:
+        description: "选择SukiSU功能分支"
+        required: true
+        type: choice
+        options:
+          - Stable
+          - Dev
+          - Other
+        default: Dev
+      custom_version_suffix:
+        description: '自定义内核版本后缀 (留空仿官方)'
+        required: false
+        type: string
+      use_zram:
+        description: '启用额外ZRAM算法'
+        required: true
+        type: boolean
+        default: true
+      use_kpm:
+        description: '启用KPM功能'
+        required: true
+        type: boolean
+        default: true
+      upload_to_release:
+        description: '是否上传到 GitHub Release'
+        required: true
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+        default: 'true'
+
+jobs:
+  determine_sukisu_version:
+    name: 获取SukiSU版本
+    runs-on: ubuntu-latest
+    outputs:
+      job_name_suffix: ${{ steps.calculate_version.outputs.job_suffix }}
+      sukisu_version: ${{ steps.calculate_version.outputs.suki_version_actual }}
+    steps:
+      - name: 安装Git
+        run: sudo apt-get update && sudo apt-get install -y git
+      - name: 计算SukiSU版本号
+        id: calculate_version
+        shell: bash
+        run: |
+          suki_version_actual_for_output="获取失败"
+          job_suffix_text=""
+          SUKI_REPO_URL="https://github.com/ShirkNeko/SukiSU-Ultra.git"
+          CLONE_BRANCH="main"
+          if git clone --branch "$CLONE_BRANCH" --single-branch "$SUKI_REPO_URL" SukiSU_temp_for_version; then
+            cd SukiSU_temp_for_version
+            commit_count=$(git rev-list --count HEAD 2>/dev/null || echo 0)
+            if [[ "$commit_count" -ne "0" && "$commit_count" != "err"* ]]; then
+              calculated_version=$(expr $commit_count + 10606)
+              suki_version_actual_for_output=$calculated_version
+              job_suffix_text=" (SukiSU $calculated_version)"
+            else
+              suki_version_actual_for_output="计算错误"
+              job_suffix_text=" (SukiSU - 版本计算失败)"
+            fi
+            cd ..
+            rm -rf SukiSU_temp_for_version
+          else
+            suki_version_actual_for_output="克隆错误"
+            job_suffix_text=" (SukiSU - 克隆失败)"
+          fi
+          echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
+          echo "suki_version_actual=${suki_version_actual_for_output}" >> $GITHUB_OUTPUT
+
+  build_kernel:
+    name: 内核编译 (SukiSU) - ${{ github.event.inputs.kernel_to_build }}${{ needs.determine_sukisu_version.outputs.job_name_suffix }}
+    needs: determine_sukisu_version
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_name: ${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}
+      release_tag: ${{ steps.prepare_release_outputs.outputs.release_tag_name }}
+      release_title: ${{ steps.prepare_release_outputs.outputs.release_title_name }}
+      final_kernel_local_version_output: ${{ steps.generate_suffixes.outputs.final_kernel_local_version_for_release_body }}
+      current_build_date_formatted_output: ${{ steps.generate_suffixes.outputs.current_build_date_formatted_for_release_body }}
+      parsed_kernel_version_output: ${{ steps.parse_kernel.outputs.parsed_kernel_version }}
+      parsed_sub_level_output: ${{ steps.parse_kernel.outputs.parsed_sub_level }}
+      sukisu_version_from_build_job: ${{ needs.determine_sukisu_version.outputs.sukisu_version }}
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+      SUKI_VERSION_NUM_FROM_PREVIOUS_JOB: ${{ needs.determine_sukisu_version.outputs.sukisu_version }}
+      # 新增：Bazel编译参数优化 (如果您的构建脚本或Bazel配置支持)
+      BAZEL_BUILD_OPTS: "--jobs=$(($(nproc) * 2)) --local_ram_resources=HOST_RAM*0.7"
+      # 新增：日志优化 - ccache 日志文件路径
+      CCACHE_LOGFILE: /tmp/ccache.log
+      # 新增：日志优化 - Bazel 性能分析文件路径 (JSON格式更常用)
+      BAZEL_PROFILE: /tmp/profile.json
+
+    steps:
+      - name: 解析内核参数
+        id: parse_kernel
+        run: |
+          IFS='_' read -r av kv sl opl rev_raw <<< "${{ github.event.inputs.kernel_to_build }}"
+          echo "SELECTED_ANDROID_VERSION=$av" >> $GITHUB_ENV
+          echo "SELECTED_KERNEL_VERSION=$kv" >> $GITHUB_ENV
+          echo "SELECTED_SUB_LEVEL=$sl" >> $GITHUB_ENV
+          echo "SELECTED_OS_PATCH_LEVEL=$opl" >> $GITHUB_ENV
+          rev="${rev_raw:-}"
+          echo "SELECTED_REVISION=$rev" >> $GITHUB_ENV
+          echo "parsed_kernel_version=$kv" >> $GITHUB_OUTPUT
+          echo "parsed_sub_level=$sl" >> $GITHUB_OUTPUT
+
+      - name: 生成版本后缀和日期
+        id: generate_suffixes
+        env:
+          USER_PROVIDED_SUFFIX: ${{ github.event.inputs.custom_version_suffix }}
+          SELECTED_AV_ENV: ${{ env.SELECTED_ANDROID_VERSION }}
+          SELECTED_KV_ENV: ${{ env.SELECTED_KERNEL_VERSION }}
+        run: |
+          final_kernel_local_version=""
+          artifact_name_suffix_part=""
+          current_date_yyyymmdd=$(date +%Y%m%d)
+          current_date_formatted=$(date +"%Y年%m月%d日")
+
+          if [[ -n "$USER_PROVIDED_SUFFIX" ]]; then
+            final_kernel_local_version="$USER_PROVIDED_SUFFIX"
+            artifact_name_suffix_part="$USER_PROVIDED_SUFFIX"
+          else
+            kernel_fixed_part_for_localversion=""
+            if [ "$SELECTED_AV_ENV" == "android12" ] && [ "$SELECTED_KV_ENV" == "5.10" ]; then
+              kernel_fixed_part_for_localversion="-android12-9"
+            elif [ "$SELECTED_AV_ENV" == "android13" ] && [ "$SELECTED_KV_ENV" == "5.10" ]; then
+              kernel_fixed_part_for_localversion="-android13-9"
+            elif [ "$SELECTED_AV_ENV" == "android13" ] && [ "$SELECTED_KV_ENV" == "5.15" ]; then
+              kernel_fixed_part_for_localversion="-android13-8"
+            elif [ "$SELECTED_AV_ENV" == "android14" ] && [ "$SELECTED_KV_ENV" == "6.1" ]; then
+              kernel_fixed_part_for_localversion="-android14-11"
+            elif [ "$SELECTED_AV_ENV" == "android15" ] && [ "$SELECTED_KV_ENV" == "6.6" ]; then
+              kernel_fixed_part_for_localversion="-android15-8"
+            else
+              kernel_fixed_part_for_localversion="-${SELECTED_AV_ENV}-${SELECTED_KV_ENV//./_}-custom"
+            fi
+            prefix1="gd"
+            prefix2="ab"
+            random_hex_11=$(head /dev/urandom | LC_ALL=C tr -dc 'a-f0-9' | head -c 11 || true)
+            random_digits_8=$(head /dev/urandom | LC_ALL=C tr -dc '0-9' | head -c 8 || true)
+            final_kernel_local_version="${kernel_fixed_part_for_localversion}-${prefix1}${random_hex_11}-${prefix2}${random_digits_8}"
+            artifact_name_suffix_part="-${current_date_yyyymmdd}"
+          fi
+          echo "FINAL_KERNEL_LOCAL_VERSION=${final_kernel_local_version}" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME_SUFFIX_PART=${artifact_name_suffix_part}" >> "$GITHUB_ENV"
+          echo "final_kernel_local_version_for_release_body=${final_kernel_local_version}" >> $GITHUB_OUTPUT
+          echo "current_build_date_formatted_for_release_body=${current_date_formatted}" >> $GITHUB_OUTPUT
+
+      - name: 调整KPM设置
+        run: |
+          if [[ "${{ env.SELECTED_ANDROID_VERSION }}" == "android15" && "${{ env.SELECTED_KERNEL_VERSION }}" == "6.6" ]]; then
+            echo "EFFECTIVE_USE_KPM=false" >> $GITHUB_ENV
+          else
+            echo "EFFECTIVE_USE_KPM=${{ github.event.inputs.use_kpm }}" >> $GITHUB_ENV
+          fi
+
+      - name: 优化构建空间
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          # 原建议使用 runner.total_mem_mb / 2，但GitHub Actions标准上下文不直接提供此变量
+          # 您可以根据运行器规格自行调整或使用固定值
+          swap-size-mb: 8192
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+
+      - name: 设置CONFIG环境变量
+        run: |
+          JOB_CONFIG="${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}"
+          echo "CONFIG=$JOB_CONFIG" >> $GITHUB_ENV
+
+      - name: 安装ccache及依赖
+        run: sudo apt update && sudo apt upgrade -y && sudo apt install -y ccache python3 git curl time
+
+      - name: 配置ccache
+        run: |
+          mkdir -p ~/.cache/bazel
+          ccache --version
+          ccache --max-size=2G
+          ccache --set-config=compression=true
+          # 新增：启用zstd压缩算法
+          ccache --set-config=compression_type=zstd
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
+      - name: 还原ccache缓存
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          # 优化：基于配置文件哈希生成key，而不是github.sha
+          key: ${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}-ccache-${{ hashFiles(format('{0}/common/arch/arm64/configs/gki_defconfig', env.CONFIG), format('{0}/common/build.config.gki', env.CONFIG), format('{0}/common/build.config.gki.aarch64', env.CONFIG), format('{0}/common/build.config', env.CONFIG)) }}
+          restore-keys: |
+            ${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}-ccache-
+
+      - name: 缓存预编译工具链
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            kernel-build-tools
+            mkbootimg
+          key: toolchain-${{ runner.os }}-v1
+
+      - name: 下载预编译工具链 (若缓存未命中)
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          AOSP_MIRROR=https://android.googlesource.com
+          BRANCH=main-kernel-build-2024 # 您可能需要根据实际情况更新此分支
+          git clone $AOSP_MIRROR/kernel/prebuilts/build-tools -b $BRANCH --depth 1 kernel-build-tools
+          git clone $AOSP_MIRROR/platform/system/tools/mkbootimg -b main --depth 1 mkbootimg # mkbootimg通常在main分支
+
+      - name: 设置工具链环境变量
+        run: |
+          echo "AVBTOOL=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/bin/avbtool" >> $GITHUB_ENV
+          echo "MKBOOTIMG=$GITHUB_WORKSPACE/mkbootimg/mkbootimg.py" >> $GITHUB_ENV
+          echo "UNPACK_BOOTIMG=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py" >> $GITHUB_ENV
+
+      - name: 设置签名密钥
+        env:
+          BOOT_SIGN_KEY: ${{ secrets.BOOT_SIGN_KEY }}
+        run: |
+          # 检查BOOT_SIGN_KEY是否为空，如果为空则生成测试密钥
+          if [ -z "$BOOT_SIGN_KEY" ]; then
+            echo "BOOT_SIGN_KEY secret is not set. Generating a test key."
+            openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > ./kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
+            echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem" >> $GITHUB_ENV
+          else
+            echo "Using BOOT_SIGN_KEY from secrets."
+            echo "$BOOT_SIGN_KEY" > ./kernel-build-tools/linux-x86/share/avb/production_key.pem
+            echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/production_key.pem" >> $GITHUB_ENV
+          fi
+
+      - name: 安装repo工具
+        run: |
+          mkdir -p ./git-repo
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ./git-repo/repo
+          chmod a+rx ./git-repo/repo
+          echo "REPO=$GITHUB_WORKSPACE/./git-repo/repo" >> $GITHUB_ENV
+
+      # 新增：依赖项审计 (建议在克隆代码后尽早运行)
+      - name: 检查依赖项安全
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high # 可根据需求调整 (critical, high, moderate, low)
+          # 允许的许可证列表，根据您的项目实际情况调整
+          allow-licenses: MIT, Apache-2.0, GPL-2.0, BSD-3-Clause 
+          # deny-licenses: # 如果需要，可以明确拒绝某些许可证
+
+      - name: 克隆依赖仓库 (AnyKernel3等)
+        run: |
+          ANYKERNEL_BRANCH="gki-2.0"
+          # 尝试特定分支，如果失败则回退到main分支
+          SUSFS_BRANCH_SPECIFIC="gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
+          SUSFS_BRANCH_FALLBACK="main"
+
+          git clone https://github.com/WildPlusKernel/AnyKernel3.git -b "$ANYKERNEL_BRANCH" AnyKernel3
+          
+          echo "Attempting to clone susfs4ksu with branch: $SUSFS_BRANCH_SPECIFIC"
+          if ! git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH_SPECIFIC" susfs4ksu; then
+            echo "Failed to clone with branch $SUSFS_BRANCH_SPECIFIC, trying fallback branch $SUSFS_BRANCH_FALLBACK"
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH_FALLBACK" susfs4ksu
+          fi
+          
+          git clone https://github.com/WildPlusKernel/kernel_patches.git kernel_patches
+          git clone https://github.com/ShirkNeko/SukiSU_patch.git SukiSU_patch
+
+      - name: 同步内核源码
+        run: |
+          mkdir -p "${{ env.CONFIG }}"
+          cd "${{ env.CONFIG }}"
+          FORMATTED_BRANCH="common-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
+          # 如果 OS_PATCH_LEVEL 为空（例如对于 lts 分支），则调整分支名
+          if [[ "${{ env.SELECTED_OS_PATCH_LEVEL }}" == "" || "${{ env.SELECTED_OS_PATCH_LEVEL }}" == "X" ]]; then
+             # 对于X_lts_这类分支，manifest分支名可能不包含OS_PATCH_LEVEL或有特定格式
+             # 这里假设它们直接对应 SELECTED_ANDROID_VERSION 和 SELECTED_KERNEL_VERSION
+             # 例如 common-android12-5.10 (您需要确认实际的manifest分支名格式)
+             # 为了更通用，我们尝试去掉空的 patch level 部分
+             FORMATTED_BRANCH="common-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
+             # 如果 lts 有特定后缀，例如 -lts
+             if [[ "${{ github.event.inputs.kernel_to_build }}" == *"_X_lts_"* ]]; then
+                FORMATTED_BRANCH+="-lts" # 假设 lts 分支在 manifest 中有 -lts 后缀
+             fi
+             # 您可能需要根据实际的 manifest 结构进一步调整这里的逻辑
+             echo "Adjusted manifest branch for LTS/X: $FORMATTED_BRANCH"
+          fi
+          
+          $REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest -b $FORMATTED_BRANCH --repo-rev=v2.16
+          
+          # 检查远程分支是否包含 deprecated，并相应修改manifest (此逻辑保持不变)
+          REMOTE_BRANCH_INFO=$(git ls-remote https://android.googlesource.com/kernel/common refs/heads/$FORMATTED_BRANCH refs/tags/$FORMATTED_BRANCH)
+          DEFAULT_MANIFEST_PATH=.repo/manifests/default.xml # 有时是 .repo/manifest.xml
+          if [ ! -f $DEFAULT_MANIFEST_PATH ] && [ -f .repo/manifest.xml ]; then
+            DEFAULT_MANIFEST_PATH=.repo/manifest.xml
+          fi
+
+          # 检查FORMATTED_BRANCH是否存在，如果不存在，尝试去掉末尾的revision部分 (针对_rX的情况)
+          # 这一步是为了应对某些分支名在manifest中可能不包含_rX后缀
+          if ! echo "$REMOTE_BRANCH_INFO" | grep -q "$FORMATTED_BRANCH"; then
+              echo "Formatted branch '$FORMATTED_BRANCH' not found directly. Trying without revision suffix."
+              FORMATTED_BRANCH_NO_REV=$(echo "$FORMATTED_BRANCH" | sed 's/_r[0-9]*$//')
+              if echo "$REMOTE_BRANCH_INFO" | grep -q "$FORMATTED_BRANCH_NO_REV"; then
+                  echo "Found branch without revision: $FORMATTED_BRANCH_NO_REV. Updating manifest init."
+                  $REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest -b $FORMATTED_BRANCH_NO_REV --repo-rev=v2.16
+                  FORMATTED_BRANCH=$FORMATTED_BRANCH_NO_REV # 更新当前使用的分支名
+              else
+                  echo "Branch '$FORMATTED_BRANCH_NO_REV' also not found. Proceeding with original or expect sync issues."
+              fi
+          fi
+          
+          # 再次检查（或初次检查）是否为 deprecated
+          # 注意：这里的 common_branch_for_grep 应该对应 manifest 中 kernel/common 的实际分支名，
+          # 它可能与 $FORMATTED_BRANCH (manifest的 -b 参数) 不同。
+          # 通常，default.xml 中 kernel/common 的 revision 会是 $FORMATTED_BRANCH
+          # 或者是一个更通用的分支，如 android-mainline。
+          # 为了安全，我们假设它与 $FORMATTED_BRANCH 相同或相似。
+          # 如果要准确，需要解析 manifest 文件获取 common 项目的实际 revision。
+          # 简单起见，我们仍基于 $FORMATTED_BRANCH。
+          ACTUAL_COMMON_REVISION_IN_MANIFEST=$(grep 'project path="common"' $DEFAULT_MANIFEST_PATH | sed -n 's/.*revision="\([^"]*\)".*/\1/p' | head -n 1)
+          if [ -z "$ACTUAL_COMMON_REVISION_IN_MANIFEST" ]; then
+              # 如果无法从manifest解析，则退回使用 FORMATTED_BRANCH
+              ACTUAL_COMMON_REVISION_IN_MANIFEST=$FORMATTED_BRANCH
+          fi
+
+          REMOTE_COMMON_BRANCH_STATUS=$(git ls-remote https://android.googlesource.com/kernel/common $ACTUAL_COMMON_REVISION_IN_MANIFEST)
+          if echo "$REMOTE_COMMON_BRANCH_STATUS" | grep -q "deprecated"; then
+             echo "Common kernel branch '$ACTUAL_COMMON_REVISION_IN_MANIFEST' might be deprecated or the check is ambiguous."
+             echo "Attempting to adjust manifest for 'deprecated/' prefix if an exact match for '$ACTUAL_COMMON_REVISION_IN_MANIFEST' is in the 'deprecated/' namespace."
+             # 更精确地替换 manifest 中的 common 项目的 revision
+             # This sed command is tricky because XML structure can vary.
+             # A safer approach might use an XML parsing tool if available.
+             # This attempts to replace revision="target_branch" with revision="deprecated/target_branch"
+             # ONLY for the project path="common" or path="kernel/common" etc.
+             # We assume 'common' is the project name for the main kernel sources.
+             # The original sed was: sed -i "s/\"${FORMATTED_BRANCH}\"/\"deprecated\/${FORMATTED_BRANCH}\"/g" $DEFAULT_MANIFEST_PATH
+             # This was too broad. Let's try to be more specific.
+             # This looks for revision="some_branch" specifically for project common
+             sed -i "/project path=\"common\"/s/revision=\"\([^\"]*\)\"/revision=\"deprecated\/\1\"/" $DEFAULT_MANIFEST_PATH
+             # Fallback if path is kernel/common
+             sed -i "/project path=\"kernel\/common\"/s/revision=\"\([^\"]*\)\"/revision=\"deprecated\/\1\"/" $DEFAULT_MANIFEST_PATH
+             echo "Manifest potentially updated to use deprecated/ branch for common project."
+          fi
+          
+          # 新增：--current-branch 用于增量同步
+          $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast --current-branch
+
+      - name: 设置SukiSU分支参数
+        run: |
+          KSU_SETUP_BRANCH_ARG=""
+          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Stable" ]]; then
+            KSU_SETUP_BRANCH_ARG=""
+          elif [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
+            KSU_SETUP_BRANCH_ARG="-s susfs-dev" # 确保这个参数是setup.sh支持的
+          elif [[ "${{ github.event.inputs.kernelsu_branch }}" == "Other" ]]; then
+            KSU_SETUP_BRANCH_ARG="" # 根据需要调整 "Other" 的行为
+          fi
+          echo "KSU_BRANCH_ARG=${KSU_SETUP_BRANCH_ARG}" >> $GITHUB_ENV
+
+      - name: 集成SukiSU
+        run: |
+          cd "${{ env.CONFIG }}"
+          # 确保 KernelSU 目录存在，如果 SukiSU 的 setup.sh 需要在此目录下运行
+          # 或者 setup.sh 会自己处理路径
+          curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- ${{ env.KSU_BRANCH_ARG }}
+
+      - name: 设置SukiSU版本号
+        shell: bash
+        run: |
+          final_suki_version_num_for_env="${{ needs.determine_sukisu_version.outputs.sukisu_version }}"
+          if [[ "$final_suki_version_num_for_env" =~ ^[0-9]+$ ]]; then
+            echo "SUKI_VERSION_NUM=$final_suki_version_num_for_env" >> $GITHUB_ENV
+          else
+            echo "SUKI_VERSION_NUM=NoVer" >> $GITHUB_ENV # 保持原样
+          fi
+
+      # 合并并优化：并行应用多个补丁
+      - name: 并行应用内核补丁
+        shell: bash
+        run: |
+          echo "Starting parallel patch application..."
+          COMMON_DIR_PATH="${GITHUB_WORKSPACE}/${{ env.CONFIG }}/common"
+          KERNEL_PATCHES_DIR="${GITHUB_WORKSPACE}/kernel_patches"
+          SUKISU_PATCH_DIR="${GITHUB_WORKSPACE}/SukiSU_patch"
+          SUSFS_DIR="${GITHUB_WORKSPACE}/susfs4ksu"
+
+          apply_susfs_patch() {
+            echo "Applying SUSFS patches..."
+            cd "$COMMON_DIR_PATH"
+            
+            # 复制SUSFS相关文件
+            # 检查源文件/目录是否存在，避免脚本因cp失败而中止
+            SUSFS_PATCH_FILE_NAME="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
+            if [ -f "${SUSFS_DIR}/kernel_patches/${SUSFS_PATCH_FILE_NAME}" ]; then
+                cp "${SUSFS_DIR}/kernel_patches/${SUSFS_PATCH_FILE_NAME}" ./ || echo "SUSFS common patch copy failed"
+            else
+                echo "SUSFS common patch file not found: ${SUSFS_DIR}/kernel_patches/${SUSFS_PATCH_FILE_NAME}"
+            fi
+
+            if [ -d "${SUSFS_DIR}/kernel_patches/fs" ]; then
+                cp -r "${SUSFS_DIR}/kernel_patches/fs/." ./fs/ || echo "SUSFS fs dir copy failed"
+            else
+                echo "SUSFS fs dir not found: ${SUSFS_DIR}/kernel_patches/fs"
+            fi
+            
+            if [ -d "${SUSFS_DIR}/kernel_patches/include/linux" ]; then
+                mkdir -p ./include/linux #确保目标目录存在
+                cp -r "${SUSFS_DIR}/kernel_patches/include/linux/." ./include/linux/ || echo "SUSFS include dir copy failed"
+            else
+                echo "SUSFS include/linux dir not found: ${SUSFS_DIR}/kernel_patches/include/linux"
+            fi
+
+            # 应用SUSFS补丁
+            if [ -f "./${SUSFS_PATCH_FILE_NAME}" ]; then
+              patch -p1 --fuzz=3 < "./${SUSFS_PATCH_FILE_NAME}" || echo "SUSFS patch application failed for $SUSFS_PATCH_FILE_NAME"
+            else
+              echo "SUSFS patch file not found for application: ./${SUSFS_PATCH_FILE_NAME}"
+            fi
+
+            # 特定修复补丁
+            FORMATTED_BRANCH_FOR_FIX="${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
+            # 注意：原始逻辑中 OS_PATCH_LEVEL 可能没有月份前导零，例如 2024-8 而不是 2024-08
+            # 为保持一致性，这里也使用原始格式进行比较
+            # 如果您的分支命名规则是固定的 (例如月份总是有两位)，请相应调整
+            ADJUSTED_OS_PATCH_LEVEL_FOR_FIX=$(echo "${{ env.SELECTED_OS_PATCH_LEVEL }}" | sed 's/^0*//') # 移除月份前导零以便比较，如果需要
+            FORMATTED_BRANCH_FOR_FIX_COMPARE="${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${ADJUSTED_OS_PATCH_LEVEL_FOR_FIX}"
+
+            # 假设原始分支名中的月份部分没有前导零，例如 2024-8
+            if [[ "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-8" || "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-9" ]]; then
+              echo "Applying fix for 6.6 kernel (android15-6.6-2024-8/9)..."
+              curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/fix/fix6.6.patch -o fix6.6.patch
+              patch -p1 < fix6.6.patch || echo "Fix patch for 6.6 failed"
+            fi
+            echo "SUSFS patches finished."
+          }
+
+          apply_hooks_patch() {
+            echo "Applying SukiSU hooks patch..."
+            cd "$COMMON_DIR_PATH"
+            HOOKS_PATCH_FILE="${SUKISU_PATCH_DIR}/hooks/syscall_hooks.patch"
+            if [ -f "$HOOKS_PATCH_FILE" ]; then
+              cp "$HOOKS_PATCH_FILE" ./syscall_hooks.patch
+              patch -p1 -F 3 < syscall_hooks.patch || echo "SukiSU hooks patch failed"
+            else
+              echo "SukiSU hooks patch file not found: $HOOKS_PATCH_FILE"
+            fi
+            echo "SukiSU hooks patch finished."
+          }
+
+          apply_zram_compression_patches() {
+            if [[ "${{ github.event.inputs.use_zram }}" == "true" ]]; then
+              echo "Applying additional ZRAM compression patches..."
+              cd "$COMMON_DIR_PATH"
+              ZRAM_PATCH_BASE="${SUKISU_PATCH_DIR}/other/zram"
+              
+              # lz4k files
+              if [ -d "${ZRAM_PATCH_BASE}/lz4k/include/linux" ]; then
+                mkdir -p ./include/linux # 确保目标目录存在
+                cp -r "${ZRAM_PATCH_BASE}/lz4k/include/linux/." ./include/linux/ || echo "lz4k include copy failed"
+              fi
+              if [ -d "${ZRAM_PATCH_BASE}/lz4k/lib" ]; then
+                cp -r "${ZRAM_PATCH_BASE}/lz4k/lib/." ./lib/ || echo "lz4k lib copy failed"
+              fi
+              if [ -d "${ZRAM_PATCH_BASE}/lz4k/crypto" ]; then
+                cp -r "${ZRAM_PATCH_BASE}/lz4k/crypto/." ./crypto/ || echo "lz4k crypto copy failed"
+              fi
+              if [ -d "${ZRAM_PATCH_BASE}/lz4k_oplus" ]; then # lz4k_oplus is a directory to be copied into lib/
+                cp -r "${ZRAM_PATCH_BASE}/lz4k_oplus" ./lib/ || echo "lz4k_oplus copy failed"
+              fi
+
+              # lz4kd patch
+              LZ4KD_PATCH_PATH="${ZRAM_PATCH_BASE}/zram_patch/${{ env.SELECTED_KERNEL_VERSION }}/lz4kd.patch"
+              if [ -f "$LZ4KD_PATCH_PATH" ]; then
+                cp "$LZ4KD_PATCH_PATH" ./lz4kd.patch
+                patch -p1 -F 3 < lz4kd.patch || echo "lz4kd patch failed for ${{ env.SELECTED_KERNEL_VERSION }}"
+              else
+                echo "lz4kd patch not found for ${{ env.SELECTED_KERNEL_VERSION }} at $LZ4KD_PATCH_PATH"
+              fi
+
+              # lz4k_oplus patch
+              LZ4K_OPLUS_PATCH_PATH="${ZRAM_PATCH_BASE}/zram_patch/${{ env.SELECTED_KERNEL_VERSION }}/lz4k_oplus.patch"
+              if [ -f "$LZ4K_OPLUS_PATCH_PATH" ]; then
+                cp "$LZ4K_OPLUS_PATCH_PATH" ./lz4k_oplus.patch
+                patch -p1 -F 3 < lz4k_oplus.patch || echo "lz4k_oplus patch failed for ${{ env.SELECTED_KERNEL_VERSION }}"
+              else
+                echo "lz4k_oplus patch not found for ${{ env.SELECTED_KERNEL_VERSION }} at $LZ4K_OPLUS_PATCH_PATH"
+              fi
+              echo "ZRAM compression patches finished."
+            else
+              echo "Skipping ZRAM compression patches as use_zram is false."
+            fi
+          }
+
+          apply_hide_stuff_patch() {
+            echo "Applying hide stuff patch..."
+            cd "$COMMON_DIR_PATH"
+            HIDE_PATCH_FILE="${SUKISU_PATCH_DIR}/69_hide_stuff.patch"
+            if [ -f "$HIDE_PATCH_FILE" ]; then
+              cp "$HIDE_PATCH_FILE" ./hide_stuff.patch
+              patch -p1 -F 3 < hide_stuff.patch || echo "Hide stuff patch failed"
+            else
+              echo "Hide stuff patch file not found: $HIDE_PATCH_FILE"
+            fi
+            echo "Hide stuff patch finished."
+          }
+
+          # Run patch functions in parallel
+          apply_susfs_patch &
+          PID_SUSFS=$!
+          apply_hooks_patch &
+          PID_HOOKS=$!
+          apply_zram_compression_patches &
+          PID_ZRAM=$!
+          apply_hide_stuff_patch &
+          PID_HIDE=$!
+
+          # Wait for all background jobs to complete
+          echo "Waiting for patch processes to complete..."
+          FAIL=0
+          wait $PID_SUSFS || { echo "SUSFS patching failed in background."; FAIL=1; }
+          wait $PID_HOOKS || { echo "Hooks patching failed in background."; FAIL=1; }
+          wait $PID_ZRAM || { echo "ZRAM patching failed in background."; FAIL=1; }
+          wait $PID_HIDE || { echo "Hide stuff patching failed in background."; FAIL=1; }
+          
+          if [ "$FAIL" -eq 1 ]; then
+            echo "One or more patch processes failed. Check logs."
+            # exit 1 # Optionally exit if any patch fails
+          else
+            echo "All patch processes completed."
+          fi
+
+
+      - name: 配置ZRAM算法
+        if: ${{ github.event.inputs.use_zram == 'true' }}
+        run: |
+          CONFIG_FILE_PATH="${{ env.CONFIG }}/common/arch/arm64/configs/gki_defconfig"
+          echo "Configuring ZRAM algorithms in $CONFIG_FILE_PATH"
+          
+          # 确保gki_defconfig文件存在
+          if [ ! -f "$CONFIG_FILE_PATH" ]; then
+            echo "Error: gki_defconfig not found at $CONFIG_FILE_PATH"
+            exit 1
+          fi
+
+          # 通用ZRAM和ZSMALLOC设置
+          # 确保不重复添加或正确修改已存在的行
+          grep -q "CONFIG_ZSMALLOC=y" "$CONFIG_FILE_PATH" || echo "CONFIG_ZSMALLOC=y" >> "$CONFIG_FILE_PATH"
+          sed -i 's/CONFIG_ZSMALLOC=m/CONFIG_ZSMALLOC=y/g' "$CONFIG_FILE_PATH"
+          
+          grep -q "CONFIG_ZRAM=y" "$CONFIG_FILE_PATH" || echo "CONFIG_ZRAM=y" >> "$CONFIG_FILE_PATH"
+          sed -i 's/CONFIG_ZRAM=m/CONFIG_ZRAM=y/g' "$CONFIG_FILE_PATH"
+
+          # 内核版本特定的配置
+          if [ "${{ env.SELECTED_KERNEL_VERSION }}" = "5.10" ]; then
+            echo "CONFIG_MODULE_SIG=n" >> "$CONFIG_FILE_PATH" # 确保不重复
+            sed -i '/^CONFIG_MODULE_SIG=y/d' "$CONFIG_FILE_PATH" # 如果存在则删除旧的
+            grep -q "CONFIG_MODULE_SIG=n" "$CONFIG_FILE_PATH" || echo "CONFIG_MODULE_SIG=n" >> "$CONFIG_FILE_PATH"
+            
+            grep -q "CONFIG_CRYPTO_LZO=y" "$CONFIG_FILE_PATH" || echo "CONFIG_CRYPTO_LZO=y" >> "$CONFIG_FILE_PATH"
+            grep -q "CONFIG_ZRAM_DEF_COMP_LZ4KD=y" "$CONFIG_FILE_PATH" || echo "CONFIG_ZRAM_DEF_COMP_LZ4KD=y" >> "$CONFIG_FILE_PATH"
+          fi
+          
+          # Android 版本特定的模块处理
+          if [ "${{ env.SELECTED_ANDROID_VERSION }}" = "android14" ] || [ "${{ env.SELECTED_ANDROID_VERSION }}" = "android15" ]; then
+            MODULES_BZL_PATH="${{ env.CONFIG }}/common/modules.bzl"
+            if [ -f "$MODULES_BZL_PATH" ]; then
+              sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "$MODULES_BZL_PATH"
+            fi
+            # 确保不重复添加或正确修改已存在的行
+            grep -q "CONFIG_MODULE_SIG_FORCE=n" "$CONFIG_FILE_PATH" || echo "CONFIG_MODULE_SIG_FORCE=n" >> "$CONFIG_FILE_PATH"
+            sed -i '/^CONFIG_MODULE_SIG_FORCE=y/d' "$CONFIG_FILE_PATH" # 如果存在则删除旧的
+            grep -q "CONFIG_MODULE_SIG_FORCE=n" "$CONFIG_FILE_PATH" || echo "CONFIG_MODULE_SIG_FORCE=n" >> "$CONFIG_FILE_PATH"
+
+          elif [ "${{ env.SELECTED_KERNEL_VERSION }}" = "5.10" ] || [ "${{ env.SELECTED_KERNEL_VERSION }}" = "5.15" ]; then
+            GKI_MODULES_FILE="${{ env.CONFIG }}/common/android/gki_aarch64_modules"
+            # 确保文件存在才操作，如果不存在则创建空文件
+            if [ -f "$GKI_MODULES_FILE" ]; then
+              rm "$GKI_MODULES_FILE"
+            fi
+            touch "$GKI_MODULES_FILE" # 创建空文件
+          fi
+
+          # 通用附加加密算法（仅当ZRAM和ZSMALLOC都启用时）
+          if grep -q "CONFIG_ZSMALLOC=y" "$CONFIG_FILE_PATH" && grep -q "CONFIG_ZRAM=y" "$CONFIG_FILE_PATH"; then
+            echo "CONFIG_CRYPTO_LZ4HC=y" >> "$CONFIG_FILE_PATH"
+            echo "CONFIG_CRYPTO_LZ4K=y" >> "$CONFIG_FILE_PATH"
+            echo "CONFIG_CRYPTO_LZ4KD=y" >> "$CONFIG_FILE_PATH"
+            echo "CONFIG_CRYPTO_842=y" >> "$CONFIG_FILE_PATH"
+            echo "CONFIG_CRYPTO_LZ4K_OPLUS=y" >> "$CONFIG_FILE_PATH"
+            # 去重，确保每个配置只存在一次为y
+            sort -u "$CONFIG_FILE_PATH" -o "$CONFIG_FILE_PATH"
+          fi
+          echo "ZRAM algorithm configuration finished."
+
+      - name: 配置SUSFS及附加功能
+        run: |
+          GKI_DEFCONFIG_PATH="${{ env.CONFIG }}/common/arch/arm64/configs/gki_defconfig"
+          BUILD_CONFIG_GKI_PATH="${{ env.CONFIG }}/common/build.config.gki"
+          BUILD_CONFIG_BAZEL_PATH="${{ env.CONFIG }}/common/build.config.gki.aarch64" # Bazel构建用
+          BUILD_CONFIG_GENERIC_PATH="${{ env.CONFIG }}/common/build.config" # 通用构建配置
+          BUILD_SCRIPT_PATH_CHECK_CONTEXTUAL="${{ env.CONFIG }}/build/build.sh" # 旧版构建脚本
+
+          echo "Configuring SUSFS and additional features in $GKI_DEFCONFIG_PATH"
+
+          # 确保gki_defconfig文件存在
+          if [ ! -f "$GKI_DEFCONFIG_PATH" ]; then
+            echo "Error: gki_defconfig not found at $GKI_DEFCONFIG_PATH"
+            exit 1
+          fi
+
+          # 添加或更新配置项，避免重复
+          configs_to_set=(
+            "CONFIG_KSU=y"
+            "CONFIG_KSU_SUSFS_SUS_SU=n" # 原为n，请确认是否需要
+            "CONFIG_KSU_MANUAL_HOOK=y"
+            "CONFIG_TMPFS_XATTR=y"
+            "CONFIG_TMPFS_POSIX_ACL=y"
+            "CONFIG_IP_NF_TARGET_TTL=y"
+            "CONFIG_IP6_NF_TARGET_HL=y"
+            "CONFIG_IP6_NF_MATCH_HL=y" # 确保此项是MATCH
+            "CONFIG_TCP_CONG_ADVANCED=y"
+            "CONFIG_TCP_CONG_BBR=y"
+            "CONFIG_NET_SCH_FQ=y"
+            "CONFIG_TCP_CONG_BIC=n"
+            "CONFIG_TCP_CONG_WESTWOOD=n"
+            "CONFIG_TCP_CONG_HTCP=n"
+            "CONFIG_KSU_SUSFS=y"
+            "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y"
+            "CONFIG_KSU_SUSFS_SUS_PATH=y"
+            "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
+            "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y"
+            "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y"
+            "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
+            "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" # 原为n
+            "CONFIG_KSU_SUSFS_TRY_UMOUNT=y"
+            "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y"
+            "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
+            "CONFIG_KSU_SUSFS_ENABLE_LOG=y" # 注意：可能产生大量日志
+            "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y"
+            "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
+            "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y"
+          )
+
+          if [[ "${{ env.EFFECTIVE_USE_KPM }}" == "true" ]]; then
+            configs_to_set+=("CONFIG_KPM=y")
+          else
+            configs_to_set+=("CONFIG_KPM=n") # 明确禁用KPM如果EFFECTIVE_USE_KPM为false
+          fi
+          
+          for config in "${configs_to_set[@]}"; do
+            key=$(echo "$config" | cut -d'=' -f1)
+            # 删除可能已存在的旧配置行 (不论值是y, n还是m)
+            sed -i "/^${key}=/d" "$GKI_DEFCONFIG_PATH"
+            # 删除可能已存在的注释掉的配置行
+            sed -i "/^# ${key} is not set/d" "$GKI_DEFCONFIG_PATH"
+            # 添加新配置
+            echo "$config" >> "$GKI_DEFCONFIG_PATH"
+          done
+          
+          # 对gki_defconfig排序去重，确保每项配置唯一
+          sort -u "$GKI_DEFCONFIG_PATH" -o "$GKI_DEFCONFIG_PATH"
+
+          # 移除 check_defconfig (适用于各种可能的构建配置文件)
+          build_config_files=("$BUILD_CONFIG_GKI_PATH" "$BUILD_CONFIG_BAZEL_PATH" "$BUILD_CONFIG_GENERIC_PATH")
+          for file_path in "${build_config_files[@]}"; do
+            if [ -f "$file_path" ]; then
+              sed -i 's/check_defconfig//g' "$file_path"
+              echo "Removed 'check_defconfig' from $file_path (if present)."
+            fi
+          done
+
+          # 处理 SKIP_KMI_STRICT_MODE_CHECK (适用于 Bazel 构建)
+          # build.sh 脚本通常不直接读取这个，Bazel构建配置（如build.config.gki.aarch64）会
+          cd "${{ env.CONFIG }}" # 确保在正确的上下文中
+          # 检查是否为非 build.sh (即 Bazel) 构建路径
+          if [ ! -f "$BUILD_SCRIPT_PATH_CHECK_CONTEXTUAL" ]; then # 如果 build.sh 不存在，则认为是 Bazel 构建
+            # 优先修改 build.config.gki.aarch64
+            if [ -f "./common/build.config.gki.aarch64" ]; then
+              grep -q "SKIP_KMI_STRICT_MODE_CHECK=1" "./common/build.config.gki.aarch64" || \
+                echo "SKIP_KMI_STRICT_MODE_CHECK=1" >> "./common/build.config.gki.aarch64"
+              echo "Ensured SKIP_KMI_STRICT_MODE_CHECK=1 in ./common/build.config.gki.aarch64"
+            # 其次修改通用的 build.config
+            elif [ -f "./common/build.config" ]; then
+              grep -q "SKIP_KMI_STRICT_MODE_CHECK=1" "./common/build.config" || \
+                echo "SKIP_KMI_STRICT_MODE_CHECK=1" >> "./common/build.config"
+              echo "Ensured SKIP_KMI_STRICT_MODE_CHECK=1 in ./common/build.config"
+            else
+              echo "Warning: Could not find a suitable Bazel build config file to set SKIP_KMI_STRICT_MODE_CHECK."
+            fi
+          fi
+          cd "$GITHUB_WORKSPACE" # 返回工作区根目录
+          echo "SUSFS and additional features configuration finished."
+
+      - name: 配置内核版本参数
+        working-directory: ./${{ env.CONFIG }}
+        run: |
+          GKI_DEFCONFIG_FILE_PATH="./common/arch/arm64/configs/gki_defconfig"
+          SETLOCALVERSION_SCRIPT="./common/scripts/setlocalversion"
+
+          echo "Configuring kernel version parameters..."
+
+          if [ -f "$GKI_DEFCONFIG_FILE_PATH" ]; then
+            sed -i '/^CONFIG_LOCALVERSION=/d' "$GKI_DEFCONFIG_FILE_PATH"
+            echo 'CONFIG_LOCALVERSION=""' >> "$GKI_DEFCONFIG_FILE_PATH"
+            sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$GKI_DEFCONFIG_FILE_PATH"
+            echo '# CONFIG_LOCALVERSION_AUTO is not set' >> "$GKI_DEFCONFIG_FILE_PATH"
+            echo "Cleared CONFIG_LOCALVERSION and CONFIG_LOCALVERSION_AUTO in gki_defconfig."
+          else
+            echo "Warning: gki_defconfig not found at $GKI_DEFCONFIG_FILE_PATH for version parameter config."
+          fi
+
+          if [ -f "$SETLOCALVERSION_SCRIPT" ]; then
+            if [[ -n "${{ env.FINAL_KERNEL_LOCAL_VERSION }}" ]]; then
+              echo '#!/bin/sh' > "$SETLOCALVERSION_SCRIPT"
+              echo 'echo "${{ env.FINAL_KERNEL_LOCAL_VERSION }}"' >> "$SETLOCALVERSION_SCRIPT"
+              chmod +x "$SETLOCALVERSION_SCRIPT"
+              echo "Set setlocalversion script to output: ${{ env.FINAL_KERNEL_LOCAL_VERSION }}"
+            else
+              # 如果 FINAL_KERNEL_LOCAL_VERSION 为空，确保移除 -dirty
+              # 注意：原始脚本的逻辑是移除 -dirty。如果 FINAL_KERNEL_LOCAL_VERSION 为空，
+              # setlocalversion 脚本会恢复其默认行为（可能包含 git describe 等）。
+              # 这里我们保持移除 -dirty 的行为，如果 FINAL_KERNEL_LOCAL_VERSION 未提供。
+              sed -i 's/-dirty//g' "$SETLOCALVERSION_SCRIPT"
+              echo "FINAL_KERNEL_LOCAL_VERSION is empty. Ensured '-dirty' is removed from setlocalversion script if present."
+            fi
+          else
+            echo "Warning: setlocalversion script not found at $SETLOCALVERSION_SCRIPT."
+          fi
+
+          # 调整 Bazel 构建相关的符号导出和版本戳（仅当为 Bazel 构建时）
+          BUILD_SCRIPT_PATH_CHECK="./build/build.sh" # 旧版构建脚本路径
+          if [ ! -f "$BUILD_SCRIPT_PATH_CHECK" ]; then # 如果不是旧版脚本构建，则认为是 Bazel/Kleaf
+            COMMON_BAZEL_PATH_CHECK="./common/BUILD.bazel"
+            KLEAF_STAMP_BZL_PATH_CHECK="./build/kernel/kleaf/impl/stamp.bzl" # Kleaf 的路径
+
+            if [ -f "$COMMON_BAZEL_PATH_CHECK" ]; then
+              # 移除受保护的导出列表，这有助于避免因自定义修改导致的ABI差异问题
+              # 注意：这可能会影响GKI兼容性，请谨慎使用
+              sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' "$COMMON_BAZEL_PATH_CHECK"
+              echo "Attempted to remove protected_exports_list from $COMMON_BAZEL_PATH_CHECK."
+            fi
+            
+            # 移除ABI符号列表文件，进一步避免ABI检查问题
+            rm -rf ./common/android/abi_gki_protected_exports_*
+            echo "Removed abi_gki_protected_exports files from ./common/android/."
+
+            if [ -f "$KLEAF_STAMP_BZL_PATH_CHECK" ]; then
+              # 移除版本戳中的 -maybe-dirty，使版本号更干净
+              sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" "$KLEAF_STAMP_BZL_PATH_CHECK"
+              echo "Removed '-maybe-dirty' from Kleaf stamp.bzl."
+            fi
+          fi
+          echo "Kernel version parameter configuration finished."
+
+      - name: 编译内核 (带重试和性能分析)
+        uses: nick-fields/retry@v3
+        env:
+          # 传递先前步骤设置的环境变量给命令执行上下文
+          CONFIG: ${{ env.CONFIG }}
+          SELECTED_ANDROID_VERSION: ${{ env.SELECTED_ANDROID_VERSION }}
+          SELECTED_KERNEL_VERSION: ${{ env.SELECTED_KERNEL_VERSION }}
+          # BAZEL_BUILD_OPTS 来自顶层 env 定义
+        with:
+          timeout_minutes: 60 # 增加超时时间
+          max_attempts: 2
+          retry_on: timeout
+          command: |
+            set -e
+            set -x
+            cd "${CONFIG}" # 使用env传递的CONFIG变量
+            
+            BUILD_SCRIPT_PATH="./build/build.sh"
+            BAZEL_DISK_CACHE_PATH="/home/runner/.cache/bazel_disk_cache" # 定义Bazel磁盘缓存路径
+            mkdir -p "$BAZEL_DISK_CACHE_PATH"
+
+            # 使用 /usr/bin/time -v 进行详细时间统计
+            if [ -f "$BUILD_SCRIPT_PATH" ]; then
+              echo "Using build.sh script..."
+              # 对于 build.sh，BAZEL_BUILD_OPTS 可能不会直接生效，除非脚本内部处理
+              # LTO=thin, SYSTEM_DLKM_RE_SIGN 等是传递给 build.sh 的环境变量
+              # CC="/usr/bin/ccache clang" 是编译命令
+              /usr/bin/time -v LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 BUILD_CONFIG=common/build.config.gki.aarch64 "$BUILD_SCRIPT_PATH" CC="/usr/bin/ccache clang" || exit 1
+            else
+              echo "Using Bazel directly..."
+              # 对于 Bazel，直接在命令行上传递优化参数
+              # 使用 $(nproc) 获取核心数，并尝试应用 HOST_RAM*0.7 (Bazel特定语法)
+              # BAZEL_BUILD_OPTS 环境变量也可能被Bazel识别
+              # --jobs=$(nproc)
+              # --local_ram_resources=HOST_RAM*0.7 (此为Bazel原生参数)
+              # --disk_cache=${BAZEL_DISK_CACHE_PATH}
+              # --config=fast
+              # --lto=thin
+              # //common:kernel_aarch64_dist
+              # --profile=${GITHUB_WORKSPACE}/${BAZEL_PROFILE} # 将 profile 输出到工作区，以便后续上传
+              
+              # 构建 Bazel 命令
+              BAZEL_CMD="tools/bazel build \
+                --disk_cache=${BAZEL_DISK_CACHE_PATH} \
+                --config=fast \
+                --lto=thin \
+                --jobs=$(nproc) \
+                --local_ram_resources=HOST_RAM*0.7 \
+                --profile=${GITHUB_WORKSPACE}/${BAZEL_PROFILE} \
+                ${BAZEL_BUILD_OPTS:-} \
+                //common:kernel_aarch64_dist" # 使用顶层env定义的BAZEL_BUILD_OPTS
+              
+              echo "Executing Bazel command: $BAZEL_CMD"
+              /usr/bin/time -v $BAZEL_CMD || exit 1
+            fi
+            
+            echo "Ccache statistics after build:"
+            ccache --show-stats
+            
+            # 如果设置了CCACHE_LOGFILE，显示日志文件大小或最后几行
+            if [ -n "${CCACHE_LOGFILE}" ] && [ -f "${CCACHE_LOGFILE}" ]; then
+              echo "Ccache log file (${CCACHE_LOGFILE}) size: $(du -h ${CCACHE_LOGFILE})"
+              echo "Last 10 lines of ccache log:"
+              tail -n 10 "${CCACHE_LOGFILE}" || true
+            fi
+
+            # 如果生成了Bazel profile，提示其位置
+            if [ -f "${GITHUB_WORKSPACE}/${BAZEL_PROFILE}" ]; then
+                echo "Bazel profile generated at: ${GITHUB_WORKSPACE}/${BAZEL_PROFILE}"
+            fi
+
+      - name: 修补内核映像 (KPM A12/A13)
+        if: env.EFFECTIVE_USE_KPM == 'true' && (env.SELECTED_ANDROID_VERSION == 'android12' || env.SELECTED_ANDROID_VERSION == 'android13') && env.SELECTED_KERNEL_VERSION != '6.6'
+        run: |
+          IMAGE_DIR_PATH="${{ env.CONFIG }}/out/${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}/dist"
+          if [ -d "$IMAGE_DIR_PATH" ] && [ -f "$IMAGE_DIR_PATH/Image" ]; then
+            cd "$IMAGE_DIR_PATH"
+            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch_kpm
+            chmod +x patch_kpm
+            ./patch_kpm
+            if [ -f "oImage" ]; then
+              mv Image Image.orig_kpm
+              mv oImage Image
+              echo "KPM patched for A12/A13 Image."
+            else
+              echo "Warning: KPM patching for A12/A13 did not produce oImage."
+            fi
+          else
+            echo "Warning: Image directory or Image file not found for A12/A13 KPM patching at $IMAGE_DIR_PATH"
+          fi
+
+      - name: 修补内核映像 (KPM A14/A15)
+        if: env.EFFECTIVE_USE_KPM == 'true' && (env.SELECTED_ANDROID_VERSION == 'android14' || env.SELECTED_ANDROID_VERSION == 'android15') && env.SELECTED_KERNEL_VERSION != '6.6'
+        run: |
+          IMAGE_DIR_PATH="${{ env.CONFIG }}/bazel-bin/common/kernel_aarch64/" # Bazel 输出路径
+          if [ -d "$IMAGE_DIR_PATH" ] && [ -f "$IMAGE_DIR_PATH/Image" ]; then
+            cd "$IMAGE_DIR_PATH"
+            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o patch_kpm
+            chmod +x patch_kpm
+            ./patch_kpm
+            if [ -f "oImage" ]; then
+              mv Image Image.orig_kpm
+              mv oImage Image
+              echo "KPM patched for A14/A15 Image."
+            else
+              echo "Warning: KPM patching for A14/A15 did not produce oImage."
+            fi
+          else
+            echo "Warning: Image directory or Image file not found for A14/A15 KPM patching at $IMAGE_DIR_PATH"
+          fi
+
+      - name: 复制内核映像至AnyKernel3
+        run: |
+          IMAGE_SOURCE_PATH=""
+          # 根据构建方式（旧版build.sh或新版Bazel）确定Image路径
+          if [ -f "./${{ env.CONFIG }}/out/${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}/dist/Image" ]; then
+            IMAGE_SOURCE_PATH="./${{ env.CONFIG }}/out/${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}/dist/Image"
+          elif [ -f "./${{ env.CONFIG }}/bazel-bin/common/kernel_aarch64/Image" ]; then
+            IMAGE_SOURCE_PATH="./${{ env.CONFIG }}/bazel-bin/common/kernel_aarch64/Image"
+          else
+            echo "Error: Compiled Image file not found in expected legacy or Bazel paths."
+            exit 1
+          fi
+
+          echo "Attempting to copy Image from: $IMAGE_SOURCE_PATH"
+          if [ -f "$IMAGE_SOURCE_PATH" ]; then
+            if [ -d "./AnyKernel3" ]; then
+              cp "$IMAGE_SOURCE_PATH" ./AnyKernel3/Image
+              echo "Image successfully copied to AnyKernel3."
+            else
+              echo "Error: AnyKernel3 directory not found."
+              exit 1
+            fi
+          else
+            echo "Error: Source Image file does not exist at $IMAGE_SOURCE_PATH."
+            exit 1 # 严格要求 Image 文件存在
+          fi
+
+      - name: 上传AnyKernel3刷机包 (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: |
+            ${{ (env.SUKI_VERSION_NUM != 'NoVer' && env.SUKI_VERSION_NUM != '' && env.SUKI_VERSION_NUM != '00000') &&
+                format('AnyKernel3_SukiSUUltra_{0}_{1}-{2}{3}', env.SUKI_VERSION_NUM, env.SELECTED_KERNEL_VERSION, env.SELECTED_SUB_LEVEL, env.ARTIFACT_NAME_SUFFIX_PART) ||
+                format('AnyKernel3_SukiSU_{0}_{1}-{2}{3}', 'NoVer', env.SELECTED_KERNEL_VERSION, env.SELECTED_SUB_LEVEL, env.ARTIFACT_NAME_SUFFIX_PART) }}
+          path: ./AnyKernel3
+          if-no-files-found: error
+
+      # 上传日志文件作为构建产物，便于调试
+      - name: 上传日志文件
+        if: always() # 总是执行，即使前面的步骤失败，也尝试上传已有日志
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.run_id }}
+          path: |
+            /tmp/ccache.log
+            ${{ env.CONFIG }}/${{ env.BAZEL_PROFILE }} # Bazel profile (如果存在)
+            # 您可以添加更多需要上传的日志文件路径
+          if-no-files-found: ignore # 如果日志文件不存在则忽略
+
+      - name: 准备 Release 输出信息
+        id: prepare_release_outputs
+        shell: bash
+        run: |
+          _suki_ver_num_for_name_prep="${{ env.SUKI_VERSION_NUM }}"
+          _kernel_ver="${{ env.SELECTED_KERNEL_VERSION }}"
+          _sub_level="${{ env.SELECTED_SUB_LEVEL }}"
+          _suffix_part="${{ env.ARTIFACT_NAME_SUFFIX_PART }}" # 包含了日期或自定义后缀
+          _artifact_name_for_upload_internal=""
+
+          if [[ "$_suki_ver_num_for_name_prep" != "NoVer" && "$_suki_ver_num_for_name_prep" =~ ^[0-9]+$ && "$_suki_ver_num_for_name_prep" != "00000" && "$_suki_ver_num_for_name_prep" != "10000" ]]; then
+            _artifact_name_for_upload_internal="AnyKernel3_SukiSUUltra_${_suki_ver_num_for_name_prep}_${_kernel_ver}-${_sub_level}${_suffix_part}"
+          else
+            _artifact_name_for_upload_internal="AnyKernel3_SukiSU_NoVer_${_kernel_ver}-${_sub_level}${_suffix_part}"
+          fi
+          
+          # 清理文件名中的非法字符，替换为 '-'
+          _artifact_name_cleaned_for_output=$(echo "$_artifact_name_for_upload_internal" | sed 's/[^a-zA-Z0-9._-]/-/g')
+          echo "artifact_name_for_release=${_artifact_name_cleaned_for_output}" >> "$GITHUB_OUTPUT"
+
+          _new_release_base_name="SukiSUUltra"
+          _final_release_title=""
+          _final_release_tag=""
+
+          if [[ "$_suki_ver_num_for_name_prep" != "NoVer" && "$_suki_ver_num_for_name_prep" =~ ^[0-9]+$ && "$_suki_ver_num_for_name_prep" != "00000" && "$_suki_ver_num_for_name_prep" != "10000" ]]; then
+            _final_release_title="${_new_release_base_name}-${_suki_ver_num_for_name_prep}_${_kernel_ver}-${_sub_level}"
+            _final_release_tag="${_new_release_base_name}-${_suki_ver_num_for_name_prep}_${_kernel_ver}-${_sub_level}"
+          else
+            # 对于NoVer情况，使用日期或自定义后缀来区分tag和title
+            _actual_suffix_for_fallback="${_suffix_part}" # _suffix_part 已经包含 '-' 前缀（如果不是自定义后缀）
+            # 如果 _suffix_part 是空的（例如自定义后缀也为空），则使用日期
+            if [[ -z "$_actual_suffix_for_fallback" ]]; then
+               _actual_suffix_for_fallback="-$(date +%Y%m%d)"
+            fi
+            _final_release_title="${_new_release_base_name}-NoVer_${_kernel_ver}-${_sub_level}${_actual_suffix_for_fallback}"
+            _final_release_tag="${_new_release_base_name}-NoVer_${_kernel_ver}-${_sub_level}${_actual_suffix_for_fallback}"
+          fi
+          
+          # 再次清理 tag 中的非法字符
+          _final_release_tag_cleaned=$(echo "$_final_release_tag" | sed 's/[^a-zA-Z0-9._-]/-/g')
+          _final_release_title_cleaned="${_final_release_title}" # Title 可以包含更多字符
+
+          echo "release_tag_name=${_final_release_tag_cleaned}" >> "$GITHUB_OUTPUT"
+          echo "release_title_name=${_final_release_title_cleaned}" >> "$GITHUB_OUTPUT"
+
+  create_release:
+    name: 创建 GitHub Release
+    needs: build_kernel
+    permissions:
+      contents: write # 需要写权限来创建Release和上传附件
+    runs-on: ubuntu-latest
+    if: success() && github.event.inputs.upload_to_release == 'true'
+    steps:
+      - name: 安装 zip 工具
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: 下载内核刷机包 (Artifact)
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build_kernel.outputs.artifact_name }}
+          path: downloaded_artifact/ # 指定下载到子目录
+
+      - name: 准备刷机包并设置路径
+        id: package_kernel
+        shell: bash
+        run: |
+          cd downloaded_artifact
+          # artifact_name 本身不含 .zip 后缀，所以直接用它作为压缩包前缀
+          zip_file_name_base="${{ needs.build_kernel.outputs.artifact_name }}"
+          zip_file_name="${zip_file_name_base}.zip"
+          
+          # 确保 downloaded_artifact 目录不为空
+          if [ -z "$(ls -A .)" ]; then
+            echo "::error title=打包失败::downloaded_artifact 目录为空，无法创建 ${zip_file_name}"
+            exit 1
+          fi
+
+          echo "Creating zip file: ../${zip_file_name} from contents of $(pwd)"
+          zip -r9 "../${zip_file_name}" .
+          cd ..
+          
+          if [ ! -f "${zip_file_name}" ]; then
+            echo "::error title=打包失败::未能创建 ${zip_file_name}"
+            exit 1
+          fi
+          echo "Packaged zip file: ${zip_file_name}"
+          echo "packaged_zip=${zip_file_name}" >> $GITHUB_OUTPUT
+
+      - name: 创建 Release 并上传刷机包
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: ${{ steps.package_kernel.outputs.packaged_zip }}
+          tag: ${{ needs.build_kernel.outputs.release_tag }}
+          name: ${{ needs.build_kernel.outputs.release_title }}
+          body: |
+            自动构建的内核发行版。
+
+            **核心信息:**
+            - 内核版本构建输入: `${{ github.event.inputs.kernel_to_build }}`
+            - SukiSU 版本 (计算): `${{ needs.build_kernel.outputs.sukisu_version_from_build_job }}`
+            - SukiSU 功能分支: `${{ github.event.inputs.kernelsu_branch }}`
+            - 自定义版本后缀 (如有): `${{ github.event.inputs.custom_version_suffix == '' && '随机生成' || format('自定义: {0}', github.event.inputs.custom_version_suffix) }}`
+            - 内核名 (LOCALVERSION): `${{ needs.build_kernel.outputs.parsed_kernel_version_output }}.${{ needs.build_kernel.outputs.parsed_sub_level_output }}${{ needs.build_kernel.outputs.final_kernel_local_version_output }}`
+            - 构建日期: `${{ needs.build_kernel.outputs.current_build_date_formatted_output }}`
+
+            **构建选项:**
+            - 使用ZRAM: `${{ github.event.inputs.use_zram }}`
+            - 使用KPM: `${{ env.EFFECTIVE_USE_KPM }}` (使用调整后的 EFFECTIVE_USE_KPM)
+
+            ---
+            *SHA: `${{ github.sha }}`*
+            *构建ID: `${{ github.run_id }}`*
+          token: ${{ secrets.GITHUB_TOKEN }} # 使用 GITHUB_TOKEN 进行认证
+          allowUpdates: true # 允许更新同名tag的Release
+          # draft: false # 设置为 true 如果希望创建草稿 Release
+          # prerelease: false # 设置为 true 如果是预发布版本
