@@ -1,4 +1,4 @@
-name: A内核编译
+name: 内核编译
 permissions:
   contents: write
   actions: write
