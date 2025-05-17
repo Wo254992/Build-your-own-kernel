@@ -5,7 +5,7 @@ permissions:
 
 # 新增：并发控制，防止同一分支的多个编译任务同时运行
 concurrency:
-  group: kernel-build-${{ github.ref }}
+  group: kernel-build-${{ github.ref }}-${{ github.event.inputs.kernel_to_build }}
   cancel-in-progress: true
 
 on:
