@@ -782,36 +782,35 @@ jobs:
         uses: nick-fields/retry@v3
         env:
           # 将环境变量传递给命令执行上下文
-          CONFIG_DIR: ${{ env.CONFIG }} # 使用更明确的变量名
-          # BAZEL_OPTIMIZATION_FLAGS 来自顶层 env 定义
-          BAZEL_PROFILE_PATH_IN_WORKSPACE: ${{ github.workspace }}/${{ env.BAZEL_PROFILE_FILENAME }}
+          CONFIG_DIR: ${{ env.CONFIG }} # 内核源码和配置所在目录 (例如: android12-5.10-168)
+          # BAZEL_OPTIMIZATION_FLAGS 来自顶层作业的env定义
+          BAZEL_PROFILE_PATH_IN_WORKSPACE: ${{ github.workspace }}/${{ env.BAZEL_PROFILE_FILENAME }} # Bazel profile文件的完整路径
         with:
-          timeout_minutes: 75 # 略微增加超时
-          max_attempts: 2
-          retry_on: timeout
+          timeout_minutes: 75 # 编译超时时间
+          max_attempts: 2     # 最大重试次数
+          retry_on: timeout   # 仅在超时时重试
           command: |
-            set -e #出错时立即退出
-            set -x #打印执行的命令
+            set -e # 出错时立即退出
+            set -x # 打印实际执行的命令
 
-            cd "${CONFIG_DIR}" # 进入内核源码目录
+            cd "${CONFIG_DIR}" # 进入内核源码和配置所在目录
             
-            BUILD_SCRIPT_PATH="./build/build.sh" # 旧版构建脚本
-            BAZEL_DISK_CACHE_PATH="/home/runner/.cache/bazel_disk_cache" # Bazel 磁盘缓存
+            BUILD_SCRIPT_PATH="./build/build.sh" # 旧版GKI构建脚本的路径
+            BAZEL_DISK_CACHE_PATH="/home/runner/.cache/bazel_disk_cache" # Bazel磁盘缓存路径
             mkdir -p "$BAZEL_DISK_CACHE_PATH"
 
             # 使用 /usr/bin/time -v 进行详细的资源使用和时间统计
             if [ -f "$BUILD_SCRIPT_PATH" ]; then
               echo "Using legacy build.sh script..."
-              # 对于 build.sh，BAZEL_OPTIMIZATION_FLAGS 可能不会直接生效
-              # 它依赖于 LTO, SYSTEM_DLKM_RE_SIGN 等环境变量
-              /usr/bin/time -v \
-                LTO=thin \
-                SYSTEM_DLKM_RE_SIGN=0 \
-                BUILD_SYSTEM_DLKM=0 \
-                KMI_SYMBOL_LIST_STRICT_MODE=0 \
-                BUILD_CONFIG=common/build.config.gki.aarch64 \
-                "$BUILD_SCRIPT_PATH" \
-                CC="/usr/bin/ccache clang" || exit 1
+              # 对于 build.sh，环境变量应在命令执行前设置好。
+              # /usr/bin/time -v 用于计时 ./build/build.sh 的执行。
+              LTO=thin \
+              SYSTEM_DLKM_RE_SIGN=0 \
+              BUILD_SYSTEM_DLKM=0 \
+              KMI_SYMBOL_LIST_STRICT_MODE=0 \
+              BUILD_CONFIG=common/build.config.gki.aarch64 \
+              CC="/usr/bin/ccache clang" \
+              /usr/bin/time -v ./build/build.sh || exit 1 # 修正点：环境变量在前，time -v build.sh 在后
             else
               echo "Using Bazel build system..."
               # 构建 Bazel 命令字符串，整合优化参数
@@ -831,16 +830,18 @@ jobs:
             echo "Ccache statistics after build:"
             ccache --show-stats
             
+            # 如果设置了CCACHE_LOGFILE，显示日志文件大小或最后几行
             if [ -n "${CCACHE_LOGFILE}" ] && [ -f "${CCACHE_LOGFILE}" ]; then
               echo "Ccache log file (${CCACHE_LOGFILE}) size: $(du -sh ${CCACHE_LOGFILE} | cut -f1)"
               echo "Last 10 lines of ccache log:"
               tail -n 10 "${CCACHE_LOGFILE}" || true
             fi
 
+            # 如果生成了Bazel profile，提示其位置
             if [ -f "${BAZEL_PROFILE_PATH_IN_WORKSPACE}" ]; then
                 echo "Bazel profile generated at: ${BAZEL_PROFILE_PATH_IN_WORKSPACE}"
             else
-                echo "Bazel profile file not found at ${BAZEL_PROFILE_PATH_IN_WORKSPACE} (this is normal if not a Bazel build or profiling failed)."
+                echo "Bazel profile file not found at ${BAZEL_PROFILE_PATH_IN_WORKSPACE} (this is normal if not a Bazel build, profiling failed, or build.sh was used)."
             fi
 
       - name: 修补内核映像 (KPM A12/A13)
