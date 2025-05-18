@@ -363,7 +363,11 @@ jobs:
       - name: 缓存工具链
         id: cache-toolchain_compile_step
         uses: actions/cache@v4
-        with: { path: |          kernel-build-tools          mkbootimg, key: toolchain-${{ runner.os }}-v1 }
+        with: # 这是之前报错的第 366 行所在的位置
+          path: |
+            kernel-build-tools
+            mkbootimg
+          key: toolchain-${{ runner.os }}-v1
 
       - name: 下载工具链（如果未找到缓存）
         if: steps.cache-toolchain_compile_step.outputs.cache-hit != 'true'
