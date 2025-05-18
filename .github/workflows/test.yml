@@ -363,7 +363,7 @@ jobs:
       - name: 缓存工具链
         id: cache-toolchain_compile_step
         uses: actions/cache@v4
-        with: # 这是之前报错的第 366 行所在的位置
+        with:
           path: |
             kernel-build-tools
             mkbootimg
@@ -451,8 +451,8 @@ jobs:
           if [ -z "$COMMON_PROJECT_REVISION_SYNC" ]; then COMMON_PROJECT_REVISION_SYNC=$_MANIFEST_BRANCH_SYNC_STEP; fi
           REMOTE_COMMON_STATUS_SYNC=$(git ls-remote https://android.googlesource.com/kernel/common $COMMON_PROJECT_REVISION_SYNC)
           if echo "$REMOTE_COMMON_STATUS_SYNC" | grep -q "deprecated/$COMMON_PROJECT_REVISION_SYNC"; then
-             sed -i "/project path=\"common\"/s|revision=\"$COMMON_PROJECT_REVISION_SYNC\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_SYNC\"|" $DEFAULT_MANIFEST_PATH_SYNC_STEP || \
-             sed -i "/project path=\"kernel\/common\"/s|revision=\"$COMMON_PROJECT_REVISION_SYNC\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_SYNC\"|" $DEFAULT_MANIFEST_PATH_SYNC_STEP
+            sed -i "/project path=\"common\"/s|revision=\"$COMMON_PROJECT_REVISION_SYNC\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_SYNC\"|" $DEFAULT_MANIFEST_PATH_SYNC_STEP || \
+            sed -i "/project path=\"kernel\/common\"/s|revision=\"$COMMON_PROJECT_REVISION_SYNC\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_SYNC\"|" $DEFAULT_MANIFEST_PATH_SYNC_STEP
           fi
           $REPO_TOOL_SYNC --trace sync -c -j$(nproc --all) --no-tags --fail-fast
 
@@ -467,7 +467,7 @@ jobs:
           else
             echo "Skipping KernelSU integration as setup script URL is not defined for variant: ${{ env.KSU_ACTUAL_VARIANT_ENV }}"
           fi
-      
+        
       - name: 为 KernelSU 变体安装 SUSFS 补丁
         env:
           CONFIG_PATH_PATCH: ${{ env.CONFIG_ENV_MATRIX }}
@@ -500,8 +500,8 @@ jobs:
               fi
               if [ "$KSU_VARIANT_PATCH" == "Next" ]; then
                  if [ -f ../../${KSU_PATCH_REPO_DIR_ENV}/next/kernel-patch-susfs-v1.5.7-to-KernelSU-Next.patch ]; then # Adjust path if common_kernel_patches is used for Next
-                    cp ../../${KSU_PATCH_REPO_DIR_ENV}/next/kernel-patch-susfs-v1.5.7-to-KernelSU-Next.patch ./
-                    patch -p1 --forward --fuzz=3 < kernel-patch-susfs-v1.5.7-to-KernelSU-Next.patch || echo "WARN: Next SUSFS patch failed"
+                   cp ../../${KSU_PATCH_REPO_DIR_ENV}/next/kernel-patch-susfs-v1.5.7-to-KernelSU-Next.patch ./
+                   patch -p1 --forward --fuzz=3 < kernel-patch-susfs-v1.5.7-to-KernelSU-Next.patch || echo "WARN: Next SUSFS patch failed"
                  fi
               fi
               cd .. # Back to $CONFIG_PATH_PATCH
@@ -530,7 +530,7 @@ jobs:
           elif [ "$KSU_VARIANT_HOOK" == "Next" ]; then # Assuming Next patches are in common_kernel_patches/next
             if [ -f "../../common_kernel_patches/next/syscall_hooks.patch" ]; then cp ../../common_kernel_patches/next/syscall_hooks.patch ./ && patch -p1 -F 3 < syscall_hooks.patch || echo "WARN: Next syscall_hooks.patch failed"; fi
           fi
-      
+        
       - name: 应用ZRAM相关补丁 (SukiSU特定)
         if: github.event.inputs.use_zram == 'true' && env.KSU_ACTUAL_VARIANT_ENV == 'SukiSU'
         env:
