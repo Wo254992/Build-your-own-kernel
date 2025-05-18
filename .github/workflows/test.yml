@@ -383,18 +383,18 @@ jobs:
           echo "MKBOOTIMG_FOR_STEP=$GITHUB_WORKSPACE/mkbootimg/mkbootimg.py" >> $GITHUB_ENV
           echo "UNPACK_BOOTIMG_FOR_STEP=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py" >> $GITHUB_ENV
 
-      - name: 密钥设置
-        env: { BOOT_SIGN_KEY_SECRET_ENV: ${{ secrets.BOOT_SIGN_KEY }} }
-        run: |
-          KEY_DIR_SETUP="$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb"
-          mkdir -p "$KEY_DIR_SETUP"
-          if [ -z "$BOOT_SIGN_KEY_SECRET_ENV" ]; then
-            openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > "$KEY_DIR_SETUP/testkey_rsa2048.pem"
-            echo "BOOT_SIGN_KEY_PATH_FOR_STEP=$KEY_DIR_SETUP/testkey_rsa2048.pem" >> $GITHUB_ENV
-          else
-            echo "$BOOT_SIGN_KEY_SECRET_ENV" > "$KEY_DIR_SETUP/production_key.pem"
-            echo "BOOT_SIGN_KEY_PATH_FOR_STEP=$KEY_DIR_SETUP/production_key.pem" >> $GITHUB_ENV
-          fi
+      #      - name: 密钥设置
+#        env: { BOOT_SIGN_KEY_SECRET_ENV: ${{ secrets.BOOT_SIGN_KEY }} }
+#        run: |
+#          KEY_DIR_SETUP="$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb"
+#          mkdir -p "$KEY_DIR_SETUP"
+#          if [ -z "$BOOT_SIGN_KEY_SECRET_ENV" ]; then
+#            openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > "$KEY_DIR_SETUP/testkey_rsa2048.pem"
+#            echo "BOOT_SIGN_KEY_PATH_FOR_STEP=$KEY_DIR_SETUP/testkey_rsa2048.pem" >> $GITHUB_ENV
+#          else
+#            echo "$BOOT_SIGN_KEY_SECRET_ENV" > "$KEY_DIR_SETUP/production_key.pem"
+#            echo "BOOT_SIGN_KEY_PATH_FOR_STEP=$KEY_DIR_SETUP/production_key.pem" >> $GITHUB_ENV
+#          fi
 
       - name: 安装仓库
         run: |
