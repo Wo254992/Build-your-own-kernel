@@ -1,4 +1,4 @@
-name: A编译内核 (单文件矩阵版 - jq增强版)
+name: A编译内核 (单文件矩阵版 - 诊断增强版)
 
 permissions:
   contents: write
@@ -58,17 +58,20 @@ on:
 
 jobs:
   prepare_build_matrix:
-    name: 准备内核编译矩阵 (jq增强调试模式)
+    name: 准备内核编译矩阵 (诊断增强模式)
     runs-on: ubuntu-latest
     outputs:
       build_matrix_json: ${{ steps.generate_matrix.outputs.matrix_json }}
       selected_kernels_count: ${{ steps.generate_matrix.outputs.selected_kernels_count }}
     steps:
-      - name: 生成编译矩阵JSON (使用jq, 带调试输出)
+      - name: 生成编译矩阵JSON (set -x 诊断)
         id: generate_matrix
         shell: bash
         run: |
-          echo "===== DEBUG: STARTING MATRIX GENERATION (jq enhanced) ====="
+          set -e # 如果任何命令失败，则立即退出
+          set -x # 执行每条命令前打印它
+
+          echo "===== DEBUG: STARTING MATRIX GENERATION (set -x diagnostic) ====="
           
           # Check if jq is present, if not, install.
           if ! command -v jq &> /dev/null
@@ -106,61 +109,64 @@ jobs:
           json_elements_for_jq="" # Accumulate individual JSON objects, one per line
           
           # 定义内核系列及其子版本
+          echo "DEBUG: Declaring KERNEL_FAMILIES_SUB_VERSIONS..."
           declare -A KERNEL_FAMILIES_SUB_VERSIONS
-          KERNEL_FAMILIES_SUB_VERSIONS["a12_510"]="
-          168|2023-04|r9
-          198|2024-01|r17
-          205|2024-03|r9
-          209|2024-05|r13
-          218|2024-08|r14
-          226|2024-11|r8
-          233|2025-02|r1
-          X|lts|r1
-          "
-          KERNEL_FAMILIES_SUB_VERSIONS["a13_510"]="
-          198|2024-01|
-          205|2024-03|
-          209|2024-05|
-          214|2024-07|
-          218|2024-08|
-          223|2024-11|
-          228|2025-01|
-          X|lts|
-          "
-          KERNEL_FAMILIES_SUB_VERSIONS["a13_515"]="
-          123|2023-11|
-          137|2024-01|
-          144|2024-03|
-          148|2024-05|
-          151|2024-08|
-          167|2024-11|
-          170|2025-01|
-          X|lts|
-          "
-          KERNEL_FAMILIES_SUB_VERSIONS["a14_515"]="
-          131|2023-11|
-          137|2024-01|
-          144|2024-03|
-          148|2024-05|
-          149|2024-06|
-          153|2024-07|
-          158|2024-08|
-          167|2024-11|
-          170|2025-01|
-          "
-          KERNEL_FAMILIES_SUB_VERSIONS["a14_61"]="
-          75|2024-05|
-          "
-          KERNEL_FAMILIES_SUB_VERSIONS["a15_66"]="
-          50|2024-10|
-          56|2024-11|
-          57|2024-12|
-          58|2025-01|
-          66|2025-02|
-          77|2025-03|
-          X|lts|
-          "
+          KERNEL_FAMILIES_SUB_VERSIONS["a12_510"]='
+168|2023-04|r9
+198|2024-01|r17
+205|2024-03|r9
+209|2024-05|r13
+218|2024-08|r14
+226|2024-11|r8
+233|2025-02|r1
+X|lts|r1
+'
+          KERNEL_FAMILIES_SUB_VERSIONS["a13_510"]='
+198|2024-01|
+205|2024-03|
+209|2024-05|
+214|2024-07|
+218|2024-08|
+223|2024-11|
+228|2025-01|
+X|lts|
+'
+          KERNEL_FAMILIES_SUB_VERSIONS["a13_515"]='
+123|2023-11|
+137|2024-01|
+144|2024-03|
+148|2024-05|
+151|2024-08|
+167|2024-11|
+170|2025-01|
+X|lts|
+'
+          KERNEL_FAMILIES_SUB_VERSIONS["a14_515"]='
+131|2023-11|
+137|2024-01|
+144|2024-03|
+148|2024-05|
+149|2024-06|
+153|2024-07|
+158|2024-08|
+167|2024-11|
+170|2025-01|
+'
+          KERNEL_FAMILIES_SUB_VERSIONS["a14_61"]='
+75|2024-05|
+'
+          KERNEL_FAMILIES_SUB_VERSIONS["a15_66"]='
+50|2024-10|
+56|2024-11|
+57|2024-12|
+58|2025-01|
+66|2025-02|
+77|2025-03|
+X|lts|
+'
+          echo "DEBUG: Finished declaring KERNEL_FAMILIES_SUB_VERSIONS."
 
+          echo "DEBUG: Declaring KERNEL_FAMILIES_DETAILS..."
           declare -A KERNEL_FAMILIES_DETAILS
           KERNEL_FAMILIES_DETAILS["a12_510"]="android12|5.10|-android12-9"
           KERNEL_FAMILIES_DETAILS["a13_510"]="android13|5.10|-android13-9"
@@ -168,6 +174,7 @@ jobs:
           KERNEL_FAMILIES_DETAILS["a14_515"]="android14|5.15|-android14-5.15"
           KERNEL_FAMILIES_DETAILS["a14_61"]="android14|6.1|-android14-11"
           KERNEL_FAMILIES_DETAILS["a15_66"]="android15|6.6|-android15-8"
+          echo "DEBUG: Finished declaring KERNEL_FAMILIES_DETAILS."
 
           selected_kernels_count=0
           echo "DEBUG: Initial selected_kernels_count: $selected_kernels_count"
@@ -175,7 +182,7 @@ jobs:
           for family_id in "${!selected_families_map[@]}"; do
             echo "DEBUG: Iterating selected_families_map. Current family_id: [$family_id]"
             
-            detail_exists_flag="No"; sub_version_exists_flag="No" # Corrected initialization
+            detail_exists_flag="No"; sub_version_exists_flag="No"
             [[ -n "${KERNEL_FAMILIES_DETAILS[$family_id]}" ]] && detail_exists_flag="Yes"
             [[ -n "${KERNEL_FAMILIES_SUB_VERSIONS[$family_id]}" ]] && sub_version_exists_flag="Yes"
             echo "DEBUG: KERNEL_FAMILIES_DETAILS[$family_id] exists? $detail_exists_flag"
@@ -203,7 +210,6 @@ jobs:
                   [[ -n "$revision" ]] && name_suffix_job+="_${revision}"
                   name_suffix_job_sanitized=$(echo "$name_suffix_job" | sed 's/\./_/g' | sed 's/[^a-zA-Z0-9_]/-/g')
 
-                  # Build JSON object using jq
                   obj_json=$(jq -n \
                     --arg family_id "$family_id" \
                     --arg job_name_suffix "$name_suffix_job_sanitized" \
@@ -224,7 +230,7 @@ jobs:
                       local_version_fixed_part: $local_version_fixed_part
                     }')
                   echo "DEBUG: Generated json_object (with jq): $obj_json"
-                  json_elements_for_jq+="${obj_json}"$'\n' # Add each JSON object on a new line for jq slurp
+                  json_elements_for_jq+="${obj_json}"$'\n' 
                   sub_version_processed_count=$((sub_version_processed_count + 1))
                 else
                   echo "DEBUG: Skipped item_line (empty or comment): [$item_line]"
@@ -236,31 +242,30 @@ jobs:
             fi
           done
           
-          final_json_array_str="[]" # Default to empty valid JSON array
+          final_json_array_str="[]" 
           if [[ -n "$json_elements_for_jq" ]]; then
             echo "DEBUG: Content to be slurped by jq (json_elements_for_jq):"
-            echo "$json_elements_for_jq"
+            echo "$json_elements_for_jq" # This might be very long
             final_json_array_str=$(echo "$json_elements_for_jq" | jq -s '.')
           else
             echo "DEBUG: No JSON elements were generated to be slurped by jq; final_json_array_str remains default '[]'."
           fi
 
-          echo "DEBUG: Final count of elements in matrix_array_json_elements (via jq processing): $(echo "$final_json_array_str" | jq 'length')"
+          echo "DEBUG: Final count of elements in matrix (from jq length): $(echo "$final_json_array_str" | jq 'length')"
           echo "--------------------------------------------------"
           
-          compact_json="[]" # Default
+          compact_json="[]" 
           if echo "$final_json_array_str" | jq -e . > /dev/null 2>&1; then
             echo "DEBUG: Final JSON array is valid (checked by jq -e)."
             compact_json=$(echo "$final_json_array_str" | jq -c .)
             echo "DEBUG: Final Generated Matrix JSON (compacted for GITHUB_OUTPUT): $compact_json"
           else
-            echo "DEBUG ERROR: final_json_array_str constructed by jq -s is NOT valid JSON! This should ideally not happen if individual objects were valid."
+            echo "DEBUG ERROR: final_json_array_str constructed by jq -s is NOT valid JSON!"
             echo "DEBUG: Faulty JSON string (final_json_array_str) was: [$final_json_array_str]"
-            # compact_json remains "[]" which is a safe default
             echo "matrix_json=$compact_json" >> "$GITHUB_OUTPUT"
-            echo "selected_kernels_count=$selected_kernels_count" >> "$GITHUB_OUTPUT" # Still output count
+            echo "selected_kernels_count=$selected_kernels_count" >> "$GITHUB_OUTPUT" 
             echo "===== DEBUG: ENDING MATRIX GENERATION WITH JSON ERROR ====="
-            exit 1 # Fail the step due to bad JSON
+            exit 1 
           fi
           
           echo "matrix_json=$compact_json" >> "$GITHUB_OUTPUT"
@@ -423,8 +428,8 @@ jobs:
           else
             EFFECTIVE_KPM_VALUE_COMPILE="$EFFECTIVE_KPM_INPUT"
           fi
-          echo "EFFECTIVE_USE_KPM_FOR_RELEASE=${EFFECTIVE_KPM_VALUE_COMPILE}" >> "$GITHUB_ENV" # For release body
-          echo "effective_kpm_value_for_config=${EFFECTIVE_KPM_VALUE_COMPILE}" >> "$GITHUB_OUTPUT" # For defconfig
+          echo "EFFECTIVE_USE_KPM_FOR_RELEASE=${EFFECTIVE_KPM_VALUE_COMPILE}" >> "$GITHUB_ENV" 
+          echo "effective_kpm_value_for_config=${EFFECTIVE_KPM_VALUE_COMPILE}" >> "$GITHUB_OUTPUT" 
 
       - name: 安装 ccache及依赖
         run: sudo apt update && sudo apt upgrade -y && sudo apt install -y ccache python3 git curl
@@ -500,15 +505,13 @@ jobs:
         run: |
           git clone https://github.com/WildPlusKernel/AnyKernel3.git -b "gki-2.0" AnyKernel3
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "gki-${ANDROID_VER_CLONE}-${KERNEL_VER_CLONE}" susfs4ksu || git clone https://gitlab.com/simonpunk/susfs4ksu.git -b main susfs4ksu
-          # Common kernel_patches, not KSU variant specific yet
           git clone https://github.com/WildPlusKernel/kernel_patches.git common_kernel_patches 
-          # KSU Variant Specific Patches
           if [[ -n "$KSU_PATCH_REPO_URL_CLONE" ]]; then
             echo "Cloning KSU variant specific patches from $KSU_PATCH_REPO_URL_CLONE to $KSU_PATCH_REPO_DIR_CLONE"
             git clone "$KSU_PATCH_REPO_URL_CLONE" "$KSU_PATCH_REPO_DIR_CLONE"
           else
             echo "No specific patch repository URL defined for $KSU_VARIANT_CLONE, skipping clone of variant patches."
-            mkdir -p "$KSU_PATCH_REPO_DIR_CLONE" # Create empty dir to prevent later errors if paths expect it
+            mkdir -p "$KSU_PATCH_REPO_DIR_CLONE" 
           fi
 
       - name: 初始化和同步内核源代码
@@ -570,7 +573,7 @@ jobs:
             if [ -d ../susfs4ksu/kernel_patches/fs ]; then cp -r ../susfs4ksu/kernel_patches/fs/* ./common/fs/ 2>/dev/null || echo "WARN: SUSFS fs dir copy failed."; fi
             if [ -d ../susfs4ksu/kernel_patches/include/linux ]; then mkdir -p ./common/include/linux && cp -r ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/ 2>/dev/null || echo "WARN: SUSFS include dir copy failed."; fi
             
-            KSU_DIR_NAME="KernelSU" # Default
+            KSU_DIR_NAME="KernelSU" 
             if [ "$KSU_VARIANT_PATCH" == "Next" ]; then KSU_DIR_NAME="KernelSU-Next"; fi
 
             if [ -d "./$KSU_DIR_NAME" ]; then
@@ -586,12 +589,12 @@ jobs:
                 if [ -f ../../common_kernel_patches/mksu/fix.patch ]; then cp ../../common_kernel_patches/mksu/fix.patch ./ && patch -p1 < fix.patch || echo "WARN: mksu fix.patch failed"; fi
               fi
               if [ "$KSU_VARIANT_PATCH" == "Next" ]; then
-                 if [ -f ../../${KSU_PATCH_REPO_DIR_ENV}/next/kernel-patch-susfs-v1.5.7-to-KernelSU-Next.patch ]; then # Adjust path if common_kernel_patches is used for Next
+                 if [ -f ../../${KSU_PATCH_REPO_DIR_ENV}/next/kernel-patch-susfs-v1.5.7-to-KernelSU-Next.patch ]; then 
                    cp ../../${KSU_PATCH_REPO_DIR_ENV}/next/kernel-patch-susfs-v1.5.7-to-KernelSU-Next.patch ./
                    patch -p1 --forward --fuzz=3 < kernel-patch-susfs-v1.5.7-to-KernelSU-Next.patch || echo "WARN: Next SUSFS patch failed"
                  fi
               fi
-              cd .. # Back to $CONFIG_PATH_PATCH
+              cd .. 
             else echo "WARN: KSU directory ./$KSU_DIR_NAME not found."; fi
             
             cd ./common
@@ -608,13 +611,13 @@ jobs:
         env:
           CONFIG_PATH_HOOK: ${{ env.CONFIG_ENV_MATRIX }}
           KSU_VARIANT_HOOK: ${{ env.KSU_ACTUAL_VARIANT_ENV }}
-          KSU_PATCH_DIR_HOOK: ${{ env.KSU_PATCH_REPO_DIR_ENV }} # e.g., SukiSU_patch_files or KSUNext_patches_dir
+          KSU_PATCH_DIR_HOOK: ${{ env.KSU_PATCH_REPO_DIR_ENV }}
         run: |
           cd "${CONFIG_PATH_HOOK}/common"
           if [ "$KSU_VARIANT_HOOK" == "SukiSU" ]; then
             if [ -f "../../${KSU_PATCH_DIR_HOOK}/hooks/syscall_hooks.patch" ]; then cp ../../${KSU_PATCH_DIR_HOOK}/hooks/syscall_hooks.patch ./ && patch -p1 -F 3 < syscall_hooks.patch || echo "WARN: SukiSU syscall_hooks.patch failed"; fi
             if [ -f "../../${KSU_PATCH_DIR_HOOK}/69_hide_stuff.patch" ]; then cp ../../${KSU_PATCH_DIR_HOOK}/69_hide_stuff.patch ./ && patch -p1 -F 3 < 69_hide_stuff.patch || echo "WARN: SukiSU hide_stuff.patch failed"; fi
-          elif [ "$KSU_VARIANT_HOOK" == "Next" ]; then # Assuming Next patches are in common_kernel_patches/next
+          elif [ "$KSU_VARIANT_HOOK" == "Next" ]; then 
             if [ -f "../../common_kernel_patches/next/syscall_hooks.patch" ]; then cp ../../common_kernel_patches/next/syscall_hooks.patch ./ && patch -p1 -F 3 < syscall_hooks.patch || echo "WARN: Next syscall_hooks.patch failed"; fi
           fi
         
@@ -643,14 +646,13 @@ jobs:
           KSU_PATCH_DIR_MGR: ${{ env.KSU_PATCH_REPO_DIR_ENV }}
         run: |
           cd "${CONFIG_PATH_MGR}"
-          KSU_MAIN_DIR_MGR="KernelSU" # Default
+          KSU_MAIN_DIR_MGR="KernelSU" 
           if [ "$KSU_VARIANT_MGR" == "Next" ]; then KSU_MAIN_DIR_MGR="KernelSU-Next"; fi
 
           if [ -d "./$KSU_MAIN_DIR_MGR" ]; then
             cd "./$KSU_MAIN_DIR_MGR"
             MANAGER_PATCH_PATH=""
-            if [ "$KSU_VARIANT_MGR" == "Next" ]; then MANAGER_PATCH_PATH="../../${KSU_PATCH_DIR_MGR}/next/manager.patch"; fi # Adjust to common_kernel_patches if needed
-            # MKSU manager patch? Example shows none.
+            if [ "$KSU_VARIANT_MGR" == "Next" ]; then MANAGER_PATCH_PATH="../../${KSU_PATCH_DIR_MGR}/next/manager.patch"; fi 
             if [[ -n "$MANAGER_PATCH_PATH" && -f "$MANAGER_PATCH_PATH" ]]; then
               cp "$MANAGER_PATCH_PATH" ./manager.patch && patch -p1 --fuzz=3 < manager.patch || echo "WARN: Manager patch failed for $KSU_VARIANT_MGR"
             elif [[ "$KSU_VARIANT_MGR" == "Next" ]]; then echo "WARN: Manager patch not found for Next at $MANAGER_PATCH_PATH"; fi
@@ -669,7 +671,6 @@ jobs:
         run: |
           if [ ! -f "$GKI_DEFCONFIG_FILE_CFG" ]; then echo "::error::Defconfig not found: $GKI_DEFCONFIG_FILE_CFG"; exit 1; fi
           
-          # Base KSU and common settings
           declare -a configs_array_cfg=(
             "CONFIG_KSU=y" "CONFIG_TMPFS_XATTR=y" "CONFIG_TMPFS_POSIX_ACL=y"
             "CONFIG_IP_NF_TARGET_TTL=y" "CONFIG_IP6_NF_TARGET_HL=y" "CONFIG_IP6_NF_MATCH_HL=y"
@@ -678,7 +679,6 @@ jobs:
           )
           if [[ "$EFFECTIVE_KPM_CFG" == "true" ]]; then configs_array_cfg+=("CONFIG_KPM=y"); else configs_array_cfg+=("CONFIG_KPM=n"); fi
           
-          # KSU Variant specific defconfigs
           if [[ "$KSU_VARIANT_CFG" == "SukiSU" || "$KSU_VARIANT_CFG" == "Next" || "$KSU_VARIANT_CFG" == "MKSU" ]]; then
             configs_array_cfg+=("CONFIG_KSU_SUSFS_SUS_SU=n")
             if [[ "$KSU_VARIANT_CFG" == "SukiSU" ]]; then configs_array_cfg+=("CONFIG_KSU_MANUAL_HOOK=y"); fi
@@ -695,13 +695,12 @@ jobs:
             )
           fi
 
-          # ZRAM defconfigs
           if [[ "$USE_ZRAM_CFG" == "true" ]]; then
             configs_array_cfg+=("CONFIG_ZSMALLOC=y" "CONFIG_ZRAM=y")
             if [[ "$KERNEL_VER_CFG" == "5.10" ]]; then configs_array_cfg+=("CONFIG_MODULE_SIG=n" "CONFIG_CRYPTO_LZO=y" "CONFIG_ZRAM_DEF_COMP_LZ4KD=y"); fi
-            if grep -q "CONFIG_ZSMALLOC=y" "$GKI_DEFCONFIG_FILE_CFG" && grep -q "CONFIG_ZRAM=y" "$GKI_DEFCONFIG_FILE_CFG"; then # Check if base ZRAM/ZSMALLOC are already y
+            if grep -q "CONFIG_ZSMALLOC=y" "$GKI_DEFCONFIG_FILE_CFG" && grep -q "CONFIG_ZRAM=y" "$GKI_DEFCONFIG_FILE_CFG"; then 
                configs_array_cfg+=("CONFIG_CRYPTO_LZ4HC=y" "CONFIG_CRYPTO_LZ4K=y" "CONFIG_CRYPTO_LZ4KD=y" "CONFIG_CRYPTO_842=y")
-               if [[ "$KSU_VARIANT_CFG" == "SukiSU" ]]; then configs_array_cfg+=("CONFIG_CRYPTO_LZ4K_OPLUS=y"); fi # SukiSU specific ZRAM algo
+               if [[ "$KSU_VARIANT_CFG" == "SukiSU" ]]; then configs_array_cfg+=("CONFIG_CRYPTO_LZ4K_OPLUS=y"); fi
             fi
           fi
 
@@ -711,31 +710,30 @@ jobs:
             sed -i "/^# ${key_item_cfg} is not set/d" "$GKI_DEFCONFIG_FILE_CFG"
             echo "$config_item_cfg" >> "$GKI_DEFCONFIG_FILE_CFG"
           done
-          # LOCALVERSION settings
+          
           sed -i '/^CONFIG_LOCALVERSION=/d' "$GKI_DEFCONFIG_FILE_CFG"
-          echo "CONFIG_LOCALVERSION=\"${FINAL_KERNEL_LOCAL_VERSION_CFG}\"" >> "$GKI_DEFCONFIG_FILE_CFG" # Directly set full LOCALVERSION
+          echo "CONFIG_LOCALVERSION=\"${FINAL_KERNEL_LOCAL_VERSION_CFG}\"" >> "$GKI_DEFCONFIG_FILE_CFG" 
           sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$GKI_DEFCONFIG_FILE_CFG"
           echo '# CONFIG_LOCALVERSION_AUTO is not set' >> "$GKI_DEFCONFIG_FILE_CFG"
           sort -u "$GKI_DEFCONFIG_FILE_CFG" -o "$GKI_DEFCONFIG_FILE_CFG"
           
-          # Build config modifications (check_defconfig removal, ABI, timestamp)
           cd "${GITHUB_WORKSPACE}/${CONFIG_DIR_CFG}"
           sed -i 's/check_defconfig//g' ./common/build.config.gki 2>/dev/null || true
           sed -i 's/check_defconfig//g' ./common/build.config.gki.aarch64 2>/dev/null || true
           sed -i 's/check_defconfig//g' ./common/build.config 2>/dev/null || true
           
-          if [ ! -f "./build/build.sh" ]; then # Bazel/Kleaf specific
+          if [ ! -f "./build/build.sh" ]; then 
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel 2>/dev/null || true
             rm -rf ./common/android/abi_gki_protected_exports_*
             if [ -f "./build/kernel/kleaf/impl/stamp.bzl" ]; then sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl; fi
-          else # build.sh specific
-             sed -i 's/-dirty//' ./common/scripts/setlocalversion 2>/dev/null || true # Remove -dirty if FINAL_KERNEL_LOCAL_VERSION_CFG is not set by user
+          else 
+             sed -i 's/-dirty//' ./common/scripts/setlocalversion 2>/dev/null || true 
           fi
-          # Timestamp spoofing in mkcompile_h
+          
           if [ -f "./common/scripts/mkcompile_h" ]; then
-            perl -pi -e 's{UTS_VERSION=\".*\"}{UTS_VERSION="#1 SMP PREEMPT $(date)"}' ./common/scripts/mkcompile_h # Simpler date, or specific fixed date
+            perl -pi -e 's{UTS_VERSION=\".*\"}{UTS_VERSION="#1 SMP PREEMPT $(date)"}' ./common/scripts/mkcompile_h 
           fi
-          # Modules fix for ZRAM if needed
+          
           if [[ "$USE_ZRAM_CFG" == "true" ]]; then
             if [ "$ANDROID_VER_CFG" = "android14" ] || [ "$ANDROID_VER_CFG" = "android15" ]; then
               if [ -f "./common/modules.bzl" ]; then sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "./common/modules.bzl"; fi
@@ -869,7 +867,7 @@ jobs:
           else
             _actual_suffix_fb="${_suffix}"
             if [[ -z "$_actual_suffix_fb" && -z "$CUSTOM_VERSION_SUFFIX_INFO" ]]; then
-               _actual_suffix_fb="-$(date +%Y%m%d)" # Produces YYYYMMDD like 20250518
+               _actual_suffix_fb="-$(date +%Y%m%d)"
             fi
             _title_rel="${_base_name_rel}-NoVer${_actual_suffix_fb}"
             _tag_rel="${_base_name_rel}-NoVer_${_krnl_ver}.${_sub_lvl}${_actual_suffix_fb}"
