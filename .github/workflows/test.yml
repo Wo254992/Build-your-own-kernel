@@ -415,7 +415,8 @@ jobs:
           echo "UNPACK_BOOTIMG_FOR_STEP=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py" >> $GITHUB_ENV
 
       - name: 密钥设置
-        env: { BOOT_SIGN_KEY_SECRET_ENV: ${{ secrets.BOOT_SIGN_KEY }} }
+        env:
+          BOOT_SIGN_KEY_SECRET_ENV: ${{ secrets.BOOT_SIGN_KEY }}
         run: |
           KEY_DIR_SETUP="$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb"
           mkdir -p "$KEY_DIR_SETUP"
