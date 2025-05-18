@@ -1,4 +1,4 @@
-name: A编译内核 (单文件矩阵版 - 诊断增强版)
+name: A编译内核 (单文件矩阵版 - 缩进修复版)
 
 permissions:
   contents: write
@@ -58,7 +58,7 @@ on:
 
 jobs:
   prepare_build_matrix:
-    name: 准备内核编译矩阵 (诊断增强模式)
+    name: 准备内核编译矩阵 (缩进修复调试模式)
     runs-on: ubuntu-latest
     outputs:
       build_matrix_json: ${{ steps.generate_matrix.outputs.matrix_json }}
@@ -68,12 +68,11 @@ jobs:
         id: generate_matrix
         shell: bash
         run: |
-          set -e # 如果任何命令失败，则立即退出
-          set -x # 执行每条命令前打印它
+          set -e 
+          set -x 
 
-          echo "===== DEBUG: STARTING MATRIX GENERATION (set -x diagnostic) ====="
+          echo "===== DEBUG: STARTING MATRIX GENERATION (indentation fixed) ====="
           
-          # Check if jq is present, if not, install.
           if ! command -v jq &> /dev/null
           then
               echo "DEBUG: jq could not be found, attempting to install..."
@@ -106,9 +105,8 @@ jobs:
               echo "DEBUG WARNING: selected_families_map is EMPTY. No kernels will be processed."
           fi
           
-          json_elements_for_jq="" # Accumulate individual JSON objects, one per line
+          json_elements_for_jq="" 
           
-          # 定义内核系列及其子版本
           echo "DEBUG: Declaring KERNEL_FAMILIES_SUB_VERSIONS..."
           declare -A KERNEL_FAMILIES_SUB_VERSIONS
           KERNEL_FAMILIES_SUB_VERSIONS["a12_510"]='
@@ -245,7 +243,7 @@ X|lts|
           final_json_array_str="[]" 
           if [[ -n "$json_elements_for_jq" ]]; then
             echo "DEBUG: Content to be slurped by jq (json_elements_for_jq):"
-            echo "$json_elements_for_jq" # This might be very long
+            echo "$json_elements_for_jq" 
             final_json_array_str=$(echo "$json_elements_for_jq" | jq -s '.')
           else
             echo "DEBUG: No JSON elements were generated to be slurped by jq; final_json_array_str remains default '[]'."
@@ -327,20 +325,20 @@ X|lts|
             "Official")
               ksu_setup_script_url_out_val="https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh"
               ksu_job_name_suffix_out_val=" (OfficialKSU)"
-              if [[ "$KSU_BRANCH_INPUT" == "Dev(开发)" ]]; then ksu_setup_script_args_out_val="-s main"; else ksu_setup_script_args_out_val="-"; fi # Official KSU uses tags for stable
+              if [[ "$KSU_BRANCH_INPUT" == "Dev(开发)" ]]; then ksu_setup_script_args_out_val="-s main"; else ksu_setup_script_args_out_val="-"; fi 
               ;;
             "Next")
               ksu_setup_script_url_out_val="https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh"
               ksu_job_name_suffix_out_val=" (KSUNext)"
               if [[ "$KSU_BRANCH_INPUT" == "Dev(开发)" ]]; then ksu_setup_script_args_out_val="-s next"; else ksu_setup_script_args_out_val="-"; fi
-              ksu_patch_repo_url_out_val="https://github.com/WildPlusKernel/kernel_patches.git" # Assuming Next patches are here
+              ksu_patch_repo_url_out_val="https://github.com/WildPlusKernel/kernel_patches.git" 
               ksu_patch_repo_dir_out_val="KSUNext_patches_dir"
               ;;
             "MKSU")
               ksu_setup_script_url_out_val="https://raw.githubusercontent.com/5ec1cff/KernelSU/main/kernel/setup.sh"
               ksu_job_name_suffix_out_val=" (MKSU)"
               if [[ "$KSU_BRANCH_INPUT" == "Dev(开发)" ]]; then ksu_setup_script_args_out_val="-s main"; else ksu_setup_script_args_out_val="-"; fi
-              ksu_patch_repo_url_out_val="https://github.com/WildPlusKernel/kernel_patches.git" # Assuming MKSU patches are here
+              ksu_patch_repo_url_out_val="https://github.com/WildPlusKernel/kernel_patches.git" 
               ksu_patch_repo_dir_out_val="MKSU_patches_dir"
               ;;
             *)
@@ -475,8 +473,7 @@ X|lts|
           echo "UNPACK_BOOTIMG_FOR_STEP=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py" >> $GITHUB_ENV
 
       - name: 密钥设置
-        env:
-          BOOT_SIGN_KEY_SECRET_ENV: ${{ secrets.BOOT_SIGN_KEY }}
+        env: { BOOT_SIGN_KEY_SECRET_ENV: ${{ secrets.BOOT_SIGN_KEY }} }
         run: |
           KEY_DIR_SETUP="$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb"
           mkdir -p "$KEY_DIR_SETUP"
