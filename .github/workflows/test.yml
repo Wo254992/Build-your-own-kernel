@@ -71,7 +71,7 @@ jobs:
           set -e 
           set -x 
 
-          echo "===== DEBUG: STARTING MATRIX GENERATION (indentation re-fixed) ====="
+          echo "===== DEBUG: STARTING MATRIX GENERATION (YAML data indent fixed) ====="
           
           if ! command -v jq &> /dev/null
           then
@@ -260,7 +260,7 @@ X|lts|
           else
             echo "DEBUG ERROR: final_json_array_str constructed by jq -s is NOT valid JSON!"
             echo "DEBUG: Faulty JSON string (final_json_array_str) was: [$final_json_array_str]"
-            echo "matrix_json=$compact_json" >> "$GITHUB_OUTPUT" # Output safe default
+            echo "matrix_json=$compact_json" >> "$GITHUB_OUTPUT" 
             echo "selected_kernels_count=$selected_kernels_count" >> "$GITHUB_OUTPUT" 
             echo "===== DEBUG: ENDING MATRIX GENERATION WITH JSON ERROR ====="
             exit 1 
