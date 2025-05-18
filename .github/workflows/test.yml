@@ -1,4 +1,4 @@
-name: A编译内核 (单文件矩阵版 - 调试版)
+name: A编译内核 (单文件矩阵版 - jq增强版)
 
 permissions:
   contents: write
@@ -58,17 +58,34 @@ on:
 
 jobs:
   prepare_build_matrix:
-    name: 准备内核编译矩阵 (调试模式)
+    name: 准备内核编译矩阵 (jq增强调试模式)
     runs-on: ubuntu-latest
     outputs:
       build_matrix_json: ${{ steps.generate_matrix.outputs.matrix_json }}
       selected_kernels_count: ${{ steps.generate_matrix.outputs.selected_kernels_count }}
     steps:
-      - name: 生成编译矩阵JSON (带调试输出)
+      - name: 生成编译矩阵JSON (使用jq, 带调试输出)
         id: generate_matrix
         shell: bash
         run: |
-          echo "===== DEBUG: STARTING MATRIX GENERATION ====="
+          echo "===== DEBUG: STARTING MATRIX GENERATION (jq enhanced) ====="
+          
+          # Check if jq is present, if not, install.
+          if ! command -v jq &> /dev/null
+          then
+              echo "DEBUG: jq could not be found, attempting to install..."
+              sudo apt-get update -y
+              sudo apt-get install -y jq
+              if ! command -v jq &> /dev/null
+              then
+                echo "DEBUG ERROR: Failed to install jq. Exiting."
+                exit 1
+              fi
+              echo "DEBUG: jq installed successfully."
+          else
+              echo "DEBUG: jq is already installed. Version: $(jq --version)"
+          fi
+
           main_choice="${{ github.event.inputs.main_kernel_choice }}"
           echo "DEBUG: Input main_kernel_choice: [$main_choice]"
           
@@ -83,10 +100,10 @@ jobs:
           
           echo "DEBUG: Selected families map keys: [${!selected_families_map[@]}]"
           if [ ${#selected_families_map[@]} -eq 0 ]; then
-              echo "DEBUG WARNING: selected_families_map is EMPTY. No kernels will be processed unless this changes."
+              echo "DEBUG WARNING: selected_families_map is EMPTY. No kernels will be processed."
           fi
           
-          matrix_array_json_elements=()
+          json_elements_for_jq="" # Accumulate individual JSON objects, one per line
           
           # 定义内核系列及其子版本
           declare -A KERNEL_FAMILIES_SUB_VERSIONS
@@ -158,7 +175,7 @@ jobs:
           for family_id in "${!selected_families_map[@]}"; do
             echo "DEBUG: Iterating selected_families_map. Current family_id: [$family_id]"
             
-            detail_exists_flag="No", sub_version_exists_flag="No"
+            detail_exists_flag="No"; sub_version_exists_flag="No" # Corrected initialization
             [[ -n "${KERNEL_FAMILIES_DETAILS[$family_id]}" ]] && detail_exists_flag="Yes"
             [[ -n "${KERNEL_FAMILIES_SUB_VERSIONS[$family_id]}" ]] && sub_version_exists_flag="Yes"
             echo "DEBUG: KERNEL_FAMILIES_DETAILS[$family_id] exists? $detail_exists_flag"
@@ -178,7 +195,6 @@ jobs:
               sub_version_processed_count=0
               while IFS= read -r item_line; do
                 echo "DEBUG: Processing item_line (sub-version string): [$item_line]"
-                # Skip empty lines and lines starting with #
                 if [[ -n "$item_line" && ! "$item_line" =~ ^[[:space:]]*# && ! "$item_line" =~ ^[[:space:]]*$ ]]; then
                   IFS='|' read -r sub_level os_patch revision <<< "$item_line"
                   echo "DEBUG: Parsed item_line: sub_level=[$sub_level], os_patch=[$os_patch], revision=[$revision]"
@@ -187,9 +203,28 @@ jobs:
                   [[ -n "$revision" ]] && name_suffix_job+="_${revision}"
                   name_suffix_job_sanitized=$(echo "$name_suffix_job" | sed 's/\./_/g' | sed 's/[^a-zA-Z0-9_]/-/g')
 
-                  json_object="{\"family_id\":\"$family_id\",\"job_name_suffix\":\"$name_suffix_job_sanitized\",\"android_version_id\":\"$android_ver_id\",\"kernel_version_id\":\"$kernel_ver_id\",\"sub_level\":\"$sub_level\",\"os_patch_level\":\"$os_patch\",\"revision\":\"$revision\",\"local_version_fixed_part\":\"$local_ver_fixed_part\"}"
-                  echo "DEBUG: Generated json_object for matrix: $json_object"
-                  matrix_array_json_elements+=("$json_object")
+                  # Build JSON object using jq
+                  obj_json=$(jq -n \
+                    --arg family_id "$family_id" \
+                    --arg job_name_suffix "$name_suffix_job_sanitized" \
+                    --arg android_version_id "$android_ver_id" \
+                    --arg kernel_version_id "$kernel_ver_id" \
+                    --arg sub_level "$sub_level" \
+                    --arg os_patch_level "$os_patch" \
+                    --arg revision "$revision" \
+                    --arg local_version_fixed_part "$local_ver_fixed_part" \
+                    '{
+                      family_id: $family_id,
+                      job_name_suffix: $job_name_suffix,
+                      android_version_id: $android_version_id,
+                      kernel_version_id: $kernel_version_id,
+                      sub_level: $sub_level,
+                      os_patch_level: $os_patch_level,
+                      revision: $revision,
+                      local_version_fixed_part: $local_version_fixed_part
+                    }')
+                  echo "DEBUG: Generated json_object (with jq): $obj_json"
+                  json_elements_for_jq+="${obj_json}"$'\n' # Add each JSON object on a new line for jq slurp
                   sub_version_processed_count=$((sub_version_processed_count + 1))
                 else
                   echo "DEBUG: Skipped item_line (empty or comment): [$item_line]"
@@ -201,14 +236,34 @@ jobs:
             fi
           done
           
-          final_json_array_str="[$(IFS=,; echo "${matrix_array_json_elements[*]}")]"
-          echo "DEBUG: Final count of elements in matrix_array_json_elements: ${#matrix_array_json_elements[@]}"
-          echo "--------------------------------------------------"
-          echo "Final Generated Matrix JSON (for GITHUB_OUTPUT): $final_json_array_str"
-          echo "Final selected_kernels_count (for GITHUB_OUTPUT): $selected_kernels_count"
+          final_json_array_str="[]" # Default to empty valid JSON array
+          if [[ -n "$json_elements_for_jq" ]]; then
+            echo "DEBUG: Content to be slurped by jq (json_elements_for_jq):"
+            echo "$json_elements_for_jq"
+            final_json_array_str=$(echo "$json_elements_for_jq" | jq -s '.')
+          else
+            echo "DEBUG: No JSON elements were generated to be slurped by jq; final_json_array_str remains default '[]'."
+          fi
+
+          echo "DEBUG: Final count of elements in matrix_array_json_elements (via jq processing): $(echo "$final_json_array_str" | jq 'length')"
           echo "--------------------------------------------------"
           
-          echo "matrix_json=$final_json_array_str" >> "$GITHUB_OUTPUT"
+          compact_json="[]" # Default
+          if echo "$final_json_array_str" | jq -e . > /dev/null 2>&1; then
+            echo "DEBUG: Final JSON array is valid (checked by jq -e)."
+            compact_json=$(echo "$final_json_array_str" | jq -c .)
+            echo "DEBUG: Final Generated Matrix JSON (compacted for GITHUB_OUTPUT): $compact_json"
+          else
+            echo "DEBUG ERROR: final_json_array_str constructed by jq -s is NOT valid JSON! This should ideally not happen if individual objects were valid."
+            echo "DEBUG: Faulty JSON string (final_json_array_str) was: [$final_json_array_str]"
+            # compact_json remains "[]" which is a safe default
+            echo "matrix_json=$compact_json" >> "$GITHUB_OUTPUT"
+            echo "selected_kernels_count=$selected_kernels_count" >> "$GITHUB_OUTPUT" # Still output count
+            echo "===== DEBUG: ENDING MATRIX GENERATION WITH JSON ERROR ====="
+            exit 1 # Fail the step due to bad JSON
+          fi
+          
+          echo "matrix_json=$compact_json" >> "$GITHUB_OUTPUT"
           echo "selected_kernels_count=$selected_kernels_count" >> "$GITHUB_OUTPUT"
           echo "===== DEBUG: ENDING MATRIX GENERATION ====="
 
@@ -814,7 +869,7 @@ jobs:
           else
             _actual_suffix_fb="${_suffix}"
             if [[ -z "$_actual_suffix_fb" && -z "$CUSTOM_VERSION_SUFFIX_INFO" ]]; then
-               _actual_suffix_fb="-$(date +%Y%m%d)" # YYYYMMDD format based on current date of May 18, 2025
+               _actual_suffix_fb="-$(date +%Y%m%d)" # Produces YYYYMMDD like 20250518
             fi
             _title_rel="${_base_name_rel}-NoVer${_actual_suffix_fb}"
             _tag_rel="${_base_name_rel}-NoVer_${_krnl_ver}.${_sub_lvl}${_actual_suffix_fb}"
