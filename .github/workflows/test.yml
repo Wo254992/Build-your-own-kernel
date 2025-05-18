@@ -1,4 +1,4 @@
-name: A编译内核 (单文件矩阵版 - 缩进修复版)
+name: A编译内核 (单文件矩阵版 - 缩进再次修正版)
 
 permissions:
   contents: write
@@ -58,7 +58,7 @@ on:
 
 jobs:
   prepare_build_matrix:
-    name: 准备内核编译矩阵 (缩进修复调试模式)
+    name: 准备内核编译矩阵 (缩进再次修正调试模式)
     runs-on: ubuntu-latest
     outputs:
       build_matrix_json: ${{ steps.generate_matrix.outputs.matrix_json }}
@@ -71,7 +71,7 @@ jobs:
           set -e 
           set -x 
 
-          echo "===== DEBUG: STARTING MATRIX GENERATION (indentation fixed) ====="
+          echo "===== DEBUG: STARTING MATRIX GENERATION (indentation re-fixed) ====="
           
           if ! command -v jq &> /dev/null
           then
@@ -236,7 +236,7 @@ X|lts|
               done <<< "$sub_versions_raw_data"
               echo "DEBUG: Processed $sub_version_processed_count sub-version lines for family_id: [$family_id]"
             else
-              echo "DEBUG WARNING: Skipped family_id [$family_id] because its details or sub-versions were not found in KERNEL_FAMILIES_DETAILS or KERNEL_FAMILIES_SUB_VERSIONS."
+              echo "DEBUG WARNING: Skipped family_id [$family_id] because its details or sub-versions were not found."
             fi
           done
           
@@ -260,7 +260,7 @@ X|lts|
           else
             echo "DEBUG ERROR: final_json_array_str constructed by jq -s is NOT valid JSON!"
             echo "DEBUG: Faulty JSON string (final_json_array_str) was: [$final_json_array_str]"
-            echo "matrix_json=$compact_json" >> "$GITHUB_OUTPUT"
+            echo "matrix_json=$compact_json" >> "$GITHUB_OUTPUT" # Output safe default
             echo "selected_kernels_count=$selected_kernels_count" >> "$GITHUB_OUTPUT" 
             echo "===== DEBUG: ENDING MATRIX GENERATION WITH JSON ERROR ====="
             exit 1 
@@ -297,7 +297,7 @@ X|lts|
           ksu_setup_script_url_out_val=""
           ksu_setup_script_args_out_val=""
           ksu_patch_repo_url_out_val=""
-          ksu_patch_repo_dir_out_val="KernelSU_variant_patches" # Default patch dir name
+          ksu_patch_repo_dir_out_val="KernelSU_variant_patches"
 
           case "$KSU_VARIANT_INPUT" in
             "SukiSU")
@@ -473,7 +473,8 @@ X|lts|
           echo "UNPACK_BOOTIMG_FOR_STEP=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py" >> $GITHUB_ENV
 
       - name: 密钥设置
-        env: { BOOT_SIGN_KEY_SECRET_ENV: ${{ secrets.BOOT_SIGN_KEY }} }
+        env:
+          BOOT_SIGN_KEY_SECRET_ENV: ${{ secrets.BOOT_SIGN_KEY }}
         run: |
           KEY_DIR_SETUP="$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb"
           mkdir -p "$KEY_DIR_SETUP"
