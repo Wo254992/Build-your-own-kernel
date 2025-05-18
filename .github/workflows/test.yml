@@ -1,4 +1,4 @@
-name: A内核编译
+name: 内核编译
 # 增加了工作流目的的注释
 # This workflow compiles an Android kernel based on user-selected inputs,
 # integrates SukiSU, and optionally creates a GitHub Release.
