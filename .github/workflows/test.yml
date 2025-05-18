@@ -1,11 +1,11 @@
-name: A编译内核 (单文件矩阵版)
+name: A编译内核 (单文件矩阵版 - 调试版)
 
 permissions:
   contents: write
   actions: write
 
 concurrency:
-  group: build-${{ github.ref }}-${{ github.event.inputs.main_kernel_choice }}-${{ github.event.inputs.additional_kernels_list }}
+  group: build-${{ github.ref }}-${{ github.event.inputs.main_kernel_choice }}
   cancel-in-progress: true
 
 on:
@@ -17,11 +17,6 @@ on:
         type: choice
         options: ['a14_61', 'a12_510', 'a13_510', 'a13_515', 'a14_515', 'a15_66', 'none']
         default: 'a14_61'
-      additional_kernels_list:
-        description: "额外编译内核系列列表,逗号分隔(如:a12_510,a15_66)。将与上方选择合并去重。"
-        required: false
-        type: string
-        default: ''
       kernelsu_variant:
         description: "选择 KernelSU 变体"
         required: true
@@ -63,33 +58,37 @@ on:
 
 jobs:
   prepare_build_matrix:
-    name: 准备内核编译矩阵
+    name: 准备内核编译矩阵 (调试模式)
     runs-on: ubuntu-latest
     outputs:
       build_matrix_json: ${{ steps.generate_matrix.outputs.matrix_json }}
       selected_kernels_count: ${{ steps.generate_matrix.outputs.selected_kernels_count }}
     steps:
-      - name: 生成编译矩阵JSON
+      - name: 生成编译矩阵JSON (带调试输出)
         id: generate_matrix
         shell: bash
         run: |
+          echo "===== DEBUG: STARTING MATRIX GENERATION ====="
           main_choice="${{ github.event.inputs.main_kernel_choice }}"
-          additional_list="${{ github.event.inputs.additional_kernels_list }}"
+          echo "DEBUG: Input main_kernel_choice: [$main_choice]"
+          
           declare -A selected_families_map
           
           if [[ "$main_choice" != "none" && -n "$main_choice" ]]; then
             selected_families_map["$main_choice"]=1
+            echo "DEBUG: Added '$main_choice' to selected_families_map from main_kernel_choice."
+          else
+            echo "DEBUG: main_kernel_choice is 'none' or empty. No family added from main_kernel_choice."
           fi
-          cleaned_additional_list=$(echo "$additional_list" | tr -d ' ' | sed 's/,/ /g')
-          for family_id_loop in $cleaned_additional_list; do
-            if [[ -n "$family_id_loop" ]]; then
-              selected_families_map["$family_id_loop"]=1
-            fi
-          done
+          
+          echo "DEBUG: Selected families map keys: [${!selected_families_map[@]}]"
+          if [ ${#selected_families_map[@]} -eq 0 ]; then
+              echo "DEBUG WARNING: selected_families_map is EMPTY. No kernels will be processed unless this changes."
+          fi
           
           matrix_array_json_elements=()
           
-          # 定义内核系列及其子版本, 您可以在这里通过行首加 # 来注释掉不想编译的子版本
+          # 定义内核系列及其子版本
           declare -A KERNEL_FAMILIES_SUB_VERSIONS
           KERNEL_FAMILIES_SUB_VERSIONS["a12_510"]="
           168|2023-04|r9
@@ -154,32 +153,64 @@ jobs:
           KERNEL_FAMILIES_DETAILS["a15_66"]="android15|6.6|-android15-8"
 
           selected_kernels_count=0
+          echo "DEBUG: Initial selected_kernels_count: $selected_kernels_count"
+
           for family_id in "${!selected_families_map[@]}"; do
+            echo "DEBUG: Iterating selected_families_map. Current family_id: [$family_id]"
+            
+            detail_exists_flag="No", sub_version_exists_flag="No"
+            [[ -n "${KERNEL_FAMILIES_DETAILS[$family_id]}" ]] && detail_exists_flag="Yes"
+            [[ -n "${KERNEL_FAMILIES_SUB_VERSIONS[$family_id]}" ]] && sub_version_exists_flag="Yes"
+            echo "DEBUG: KERNEL_FAMILIES_DETAILS[$family_id] exists? $detail_exists_flag"
+            echo "DEBUG: KERNEL_FAMILIES_SUB_VERSIONS[$family_id] exists? $sub_version_exists_flag"
+
             if [[ -n "${KERNEL_FAMILIES_DETAILS[$family_id]}" && -n "${KERNEL_FAMILIES_SUB_VERSIONS[$family_id]}" ]]; then
+              echo "DEBUG: Both details and sub-versions found for family_id: [$family_id]"
               selected_kernels_count=$((selected_kernels_count + 1))
+              echo "DEBUG: Incremented selected_kernels_count to: $selected_kernels_count for family: [$family_id]"
+              
               IFS='|' read -r android_ver_id kernel_ver_id local_ver_fixed_part <<< "${KERNEL_FAMILIES_DETAILS[$family_id]}"
+              echo "DEBUG: Parsed details for [$family_id]: android_ver_id=[$android_ver_id], kernel_ver_id=[$kernel_ver_id], local_ver_fixed_part=[$local_ver_fixed_part]"
               
               sub_versions_raw_data="${KERNEL_FAMILIES_SUB_VERSIONS[$family_id]}"
+              echo "DEBUG: Raw sub_versions_data for [$family_id] (first 60 chars): [$(echo "$sub_versions_raw_data" | head -c 60)...]"
+              
+              sub_version_processed_count=0
               while IFS= read -r item_line; do
+                echo "DEBUG: Processing item_line (sub-version string): [$item_line]"
                 # Skip empty lines and lines starting with #
                 if [[ -n "$item_line" && ! "$item_line" =~ ^[[:space:]]*# && ! "$item_line" =~ ^[[:space:]]*$ ]]; then
                   IFS='|' read -r sub_level os_patch revision <<< "$item_line"
+                  echo "DEBUG: Parsed item_line: sub_level=[$sub_level], os_patch=[$os_patch], revision=[$revision]"
                   
                   name_suffix_job="${family_id}_${sub_level}_${os_patch//-/}"
                   [[ -n "$revision" ]] && name_suffix_job+="_${revision}"
                   name_suffix_job_sanitized=$(echo "$name_suffix_job" | sed 's/\./_/g' | sed 's/[^a-zA-Z0-9_]/-/g')
 
                   json_object="{\"family_id\":\"$family_id\",\"job_name_suffix\":\"$name_suffix_job_sanitized\",\"android_version_id\":\"$android_ver_id\",\"kernel_version_id\":\"$kernel_ver_id\",\"sub_level\":\"$sub_level\",\"os_patch_level\":\"$os_patch\",\"revision\":\"$revision\",\"local_version_fixed_part\":\"$local_ver_fixed_part\"}"
+                  echo "DEBUG: Generated json_object for matrix: $json_object"
                   matrix_array_json_elements+=("$json_object")
+                  sub_version_processed_count=$((sub_version_processed_count + 1))
+                else
+                  echo "DEBUG: Skipped item_line (empty or comment): [$item_line]"
                 fi
               done <<< "$sub_versions_raw_data"
+              echo "DEBUG: Processed $sub_version_processed_count sub-version lines for family_id: [$family_id]"
+            else
+              echo "DEBUG WARNING: Skipped family_id [$family_id] because its details or sub-versions were not found in KERNEL_FAMILIES_DETAILS or KERNEL_FAMILIES_SUB_VERSIONS."
             fi
           done
           
           final_json_array_str="[$(IFS=,; echo "${matrix_array_json_elements[*]}")]"
-          echo "Generated Matrix JSON: $final_json_array_str"
+          echo "DEBUG: Final count of elements in matrix_array_json_elements: ${#matrix_array_json_elements[@]}"
+          echo "--------------------------------------------------"
+          echo "Final Generated Matrix JSON (for GITHUB_OUTPUT): $final_json_array_str"
+          echo "Final selected_kernels_count (for GITHUB_OUTPUT): $selected_kernels_count"
+          echo "--------------------------------------------------"
+          
           echo "matrix_json=$final_json_array_str" >> "$GITHUB_OUTPUT"
           echo "selected_kernels_count=$selected_kernels_count" >> "$GITHUB_OUTPUT"
+          echo "===== DEBUG: ENDING MATRIX GENERATION ====="
 
   determine_ksu_details:
     name: 准备KernelSU详情
@@ -384,8 +415,7 @@ jobs:
           echo "UNPACK_BOOTIMG_FOR_STEP=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py" >> $GITHUB_ENV
 
       - name: 密钥设置
-        env:
-          BOOT_SIGN_KEY_SECRET_ENV: ${{ secrets.BOOT_SIGN_KEY }}
+        env: { BOOT_SIGN_KEY_SECRET_ENV: ${{ secrets.BOOT_SIGN_KEY }} }
         run: |
           KEY_DIR_SETUP="$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb"
           mkdir -p "$KEY_DIR_SETUP"
@@ -783,7 +813,7 @@ jobs:
           else
             _actual_suffix_fb="${_suffix}"
             if [[ -z "$_actual_suffix_fb" && -z "$CUSTOM_VERSION_SUFFIX_INFO" ]]; then
-               _actual_suffix_fb="-$(date +%Y%m%d)"
+               _actual_suffix_fb="-$(date +%Y%m%d)" # YYYYMMDD format based on current date of May 18, 2025
             fi
             _title_rel="${_base_name_rel}-NoVer${_actual_suffix_fb}"
             _tag_rel="${_base_name_rel}-NoVer_${_krnl_ver}.${_sub_lvl}${_actual_suffix_fb}"
