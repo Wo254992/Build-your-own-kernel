@@ -407,9 +407,9 @@ jobs:
             KSU_SETUP_BRANCH_ARG="" 
             echo "SukiSU branch: Stable (setup.sh default)"
           elif [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
-            # ***** 关键修复：setup.sh 通常使用 -b <branch> 来切换分支 *****
-            KSU_SETUP_BRANCH_ARG="-b susfs-dev" 
-            echo "SukiSU branch: Dev (requesting susfs-dev branch via -b)"
+            # ***** 关键修复：确保传递给 setup.sh 的是它能识别的分支名参数 *****
+            KSU_SETUP_BRANCH_ARG="susfs-dev" 
+            echo "SukiSU branch: Dev (requesting 'susfs-dev' branch directly)"
           elif [[ "${{ github.event.inputs.kernelsu_branch }}" == "Other" ]]; then
             KSU_SETUP_BRANCH_ARG=""
             echo "SukiSU branch: Other (setup.sh default)"
@@ -420,9 +420,15 @@ jobs:
         run: |
           set -euo pipefail
           cd "${{ env.KERNEL_SRC_ROOT }}"
-          echo "Integrating SukiSU with args: ${{ env.KSU_BRANCH_ARG }}"
+          echo "Integrating SukiSU with args: '${{ env.KSU_BRANCH_ARG }}'"
           # bash -s -- 会将后续参数作为位置参数传递给 setup.sh
-          curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- ${{ env.KSU_BRANCH_ARG }}
+          # 如果 KSU_BRANCH_ARG 为空，则不传递任何参数给 setup.sh
+          if [[ -n "${{ env.KSU_BRANCH_ARG }}" ]]; then
+            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- ${{ env.KSU_BRANCH_ARG }}
+          else
+            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash
+          fi
+          echo "SukiSU integration script executed."
 
       - name: 设置SukiSU版本号
         shell: bash
@@ -431,6 +437,7 @@ jobs:
           final_suki_version_num_for_env="${{ needs.determine_sukisu_version.outputs.sukisu_version }}"
           if [[ "$final_suki_version_num_for_env" =~ ^[0-9]+$ ]]; then
             echo "SUKI_VERSION_NUM=$final_suki_version_num_for_env" >> $GITHUB_ENV
+            echo "SukiSU version number set to: $final_suki_version_num_for_env"
           else
             echo "SUKI_VERSION_NUM=NoVer" >> $GITHUB_ENV
             echo "::warning::Invalid SukiSU version ('$final_suki_version_num_for_env'). Using 'NoVer'."
@@ -534,8 +541,7 @@ jobs:
               cp "$HOOKS_PATCH_FILE" ./syscall_hooks.patch
               patch -p1 -F 3 < syscall_hooks.patch || { echo "::error::SukiSU hooks patch failed."; exit 1; }
             else
-              echo "::error::SukiSU hooks patch file not found"
-              exit 1
+              echo "::error::SukiSU hooks patch file not found"; exit 1;
             fi
           }
           apply_zram_compression_patches() {
@@ -551,9 +557,9 @@ jobs:
               else echo "::error::ZRAM crypto src NOT FOUND: $src_crypto"; exit 1; fi
               if [ -d "${ZRAM_PATCH_BASE}/lz4k_oplus" ]; then mkdir -p ./lib; cp -r "${ZRAM_PATCH_BASE}/lz4k_oplus" ./lib/ || exit 1; fi
               LZ4KD_PATCH="${ZRAM_PATCH_BASE}/zram_patch/${{env.SELECTED_KERNEL_VERSION}}/lz4kd.patch"
-              if [ -f "$LZ4KD_PATCH" ]; then cp "$LZ4KD_PATCH" .; patch -p1 -F 3 < lz4kd.patch || exit 1; fi
+              if [ -f "$LZ4KD_PATCH" ]; then cp "$LZ4KD_PATCH" ./lz4kd.patch; patch -p1 -F 3 < lz4kd.patch || exit 1; fi
               LZ4KOPLUS_PATCH="${ZRAM_PATCH_BASE}/zram_patch/${{env.SELECTED_KERNEL_VERSION}}/lz4k_oplus.patch"
-              if [ -f "$LZ4KOPLUS_PATCH" ]; then cp "$LZ4KOPLUS_PATCH" .; patch -p1 -F 3 < lz4k_oplus.patch || exit 1; fi
+              if [ -f "$LZ4KOPLUS_PATCH" ]; then cp "$LZ4KOPLUS_PATCH" ./lz4k_oplus.patch; patch -p1 -F 3 < lz4k_oplus.patch || exit 1; fi
             fi
           }
           apply_hide_stuff_patch() {
@@ -563,8 +569,7 @@ jobs:
               cp "$HIDE_PATCH_FILE" ./hide_stuff.patch
               patch -p1 -F 3 < hide_stuff.patch || { echo "::error::Hide stuff patch failed."; exit 1; }
             else
-              echo "::error::Hide stuff patch file not found"
-              exit 1
+              echo "::error::Hide stuff patch file not found"; exit 1;
             fi
           }
           apply_hooks_patch & PID_HOOKS=$!
@@ -706,8 +711,7 @@ jobs:
           if [ -d "$IMG_DIR" ] && [ -f "$IMG_FILE" ]; then
             cd "$IMG_DIR" || exit 1
             curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o pk
-            chmod +x pk
-            ./pk
+            chmod +x pk; ./pk
             if [ -f "oImage" ]; then mv Image Image.o; mv oImage Image; fi
           fi
 
@@ -720,8 +724,7 @@ jobs:
           if [ -d "$IMG_DIR" ] && [ -f "$IMG_FILE" ]; then
             cd "$IMG_DIR" || exit 1
             curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o pk
-            chmod +x pk
-            ./pk
+            chmod +x pk; ./pk
             if [ -f "oImage" ]; then mv Image Image.o; mv oImage Image; fi
           fi
 
@@ -750,8 +753,7 @@ jobs:
           set -euo pipefail
           IMG_VALIDATE="$GITHUB_WORKSPACE/AnyKernel3/Image"
           if [ ! -f "$IMG_VALIDATE" ]; then echo "::error::Kernel Image not found for validation: $IMG_VALIDATE"; exit 1; fi
-          file_out=$(file "$IMG_VALIDATE")
-          echo "File output: $file_out"
+          file_out=$(file "$IMG_VALIDATE"); echo "File output: $file_out"
           if echo "$file_out" | grep -q "ARM64" && echo "$file_out" | grep -q "Linux kernel"; then
             echo "Validation OK."
           else
