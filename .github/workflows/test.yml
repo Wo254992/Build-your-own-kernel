@@ -273,9 +273,9 @@ jobs:
         with:
           base-ref: ${{ github.sha }}~1
           head-ref: ${{ github.sha }}
-          fail-on-severity: high # 定义“高”严重性为触发条件
+          fail-on-severity: high
           allow-licenses: MIT, Apache-2.0, GPL-2.0, BSD-3-Clause
-          warn-only: true        # ***** 关键修复：使用action内置参数，仅警告，不使步骤失败 *****
+          warn-only: true # 使用action内置参数，仅警告，不使步骤失败
 
       - name: 克隆依赖仓库 (AnyKernel3等)
         run: |
@@ -345,7 +345,7 @@ jobs:
           SUSFS_FS_SRC_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/fs"
           SUSFS_FS_DEST_PATH="./common/fs/"
           if [ -d "$SUSFS_FS_SRC_PATH" ]; then
-            if [ -n "$(ls -A "$SUSFS_FS_SRC_PATH" 2>/dev/null)" ]; then
+            if [ -n "$(ls -A "$SUSFS_FS_SRC_PATH" 2>/dev/null)" ]; then # ls -A 的错误输出到 /dev/null 以避免在目录不存在时意外中止
               echo "Copying SUSFS fs dir contents: $SUSFS_FS_SRC_PATH to $SUSFS_FS_DEST_PATH"
               cp -r ${SUSFS_FS_SRC_PATH}/* "$SUSFS_FS_DEST_PATH" || echo "::warning::[SUSFS Diag] SUSFS fs dir copy FAILED. CONTINUING."
             else
@@ -368,13 +368,15 @@ jobs:
             echo "::warning::[SUSFS Diag] SUSFS source include/linux directory not found: $SUSFS_INCLUDE_SRC_PATH."
           fi
 
-          current_dir_before_cd_common=$(pwd)
+          current_dir_before_cd_common=$(pwd) # 保存当前目录 (KERNEL_SRC_ROOT)
           if ! cd ./common; then
             echo "::error::[SUSFS Diag] Failed to cd into ./common. Subsequent patch may fail or apply to wrong directory."
+            # 注意：由于没有 set -e，如果cd失败，后续命令会在错误的目录(KERNEL_SRC_ROOT)执行
+            # 这本身就可能是一个问题，确保 KERNEL_SRC_ROOT/common 存在是前提
           else
             SUSFS_PATCH_FILENAME_IN_COMMON="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
-            if [ -f "./${SUSFS_PATCH_FILENAME_IN_COMMON}" ]; then
-              echo "[SUSFS Diag] Attempting to apply patch: ./${SUSFS_PATCH_FILENAME_IN_COMMON} (in $(pwd))"
+            if [ -f "./${SUSFS_PATCH_FILENAME_IN_COMMON}" ]; then # 此判断在 KERNEL_SRC_ROOT/common 下执行
+              echo "[SUSFS Diag] Attempting to apply patch: ./${SUSFS_PATCH_FILENAME_IN_COMMON} (current dir: $(pwd))"
               patch_output_file=$(mktemp)
               echo "--- [SUSFS Diag] Main Patch Output (Command: patch -p1 --fuzz=3 < ./${SUSFS_PATCH_FILENAME_IN_COMMON}) ---"
               if patch -p1 --fuzz=3 < "./${SUSFS_PATCH_FILENAME_IN_COMMON}" > "$patch_output_file" 2>&1; then
@@ -383,7 +385,7 @@ jobs:
                 patch_exit_code=$?
                 echo "::warning::[SUSFS Diag] Main SUSFS patch command exited with code $patch_exit_code (1:rejections, 2:trouble). CONTINUING."
               fi
-              cat "$patch_output_file" || echo "[SUSFS Diag] No patch output for main patch."
+              cat "$patch_output_file" || echo "[SUSFS Diag] No patch output for main patch." # 即使cat失败也继续
               rm -f "$patch_output_file"
               echo "--- [SUSFS Diag] Main Patch Output End ---"
             else
@@ -392,7 +394,8 @@ jobs:
             
             FORMATTED_BRANCH_FOR_FIX_COMPARE="${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
             if [[ "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-08" || "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-09" ]]; then
-              echo "[SUSFS Diag] Applying fix for 6.6 kernel (in $(pwd))..."
+              echo "[SUSFS Diag] Applying fix for 6.6 kernel (current dir: $(pwd))..."
+              # 确保 fix6.6.patch 下载到当前目录 (common)
               curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/fix/fix6.6.patch -o fix6.6.patch
               patch_output_file_66=$(mktemp)
               echo "--- [SUSFS Diag] 6.6 Fix Patch Output (Command: patch -p1 < fix6.6.patch) ---"
@@ -402,11 +405,12 @@ jobs:
                 patch_exit_code_66=$?
                 echo "::warning::[SUSFS Diag] 6.6 fix patch command exited with code $patch_exit_code_66. CONTINUING."
               fi
-              cat "$patch_output_file_66" || echo "[SUSFS Diag] No patch output for 6.6 fix."
+              cat "$patch_output_file_66" || echo "[SUSFS Diag] No patch output for 6.6 fix." # 即使cat失败也继续
               rm -f "$patch_output_file_66"
               echo "--- [SUSFS Diag] 6.6 Fix Patch Output End ---"
             fi
-            cd "$current_dir_before_cd_common" || echo "::warning::[SUSFS Diag] Failed to cd back to original directory."
+            # 应用完补丁后，返回到 working-directory 指定的目录 (KERNEL_SRC_ROOT)
+            cd "$current_dir_before_cd_common" || echo "::warning::[SUSFS Diag] Failed to cd back to $current_dir_before_cd_common from $(pwd)"
           fi
           echo "[SUSFS Diag] SUSFS patching (old logic) finished. PLEASE REVIEW LOGS CAREFULLY."
 
