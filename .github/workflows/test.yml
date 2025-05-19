@@ -372,7 +372,7 @@ jobs:
             
             _MANIFEST_BRANCH_FOR_INIT="common-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
             if [[ -n "${{ env.SELECTED_OS_PATCH_LEVEL }}" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "_" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "X" ]]; then
-                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
+                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
             elif [[ "${{ github.event.inputs.kernel_to_build }}" == *"_X_lts_"* || "${{ github.event.inputs.kernel_to_build }}" == *"_lts_"* ]]; then
                 _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-lts"
             fi
