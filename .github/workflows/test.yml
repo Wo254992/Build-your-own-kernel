@@ -1,4 +1,4 @@
-name: 内核构建
+name: 内核构建流程
 
 permissions:
   contents: read 
@@ -90,7 +90,7 @@ on:
         default: 'true'
 
 jobs:
-  version_probe: # Job name changed
+  version_probe:
     name: SukiSU版本探测
     runs-on: ubuntu-latest
     outputs:
@@ -132,7 +132,7 @@ jobs:
           echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
           echo "suki_version_actual=${suki_version_actual_for_output}" >> $GITHUB_OUTPUT
 
-  kernel_build_core: # Job name changed
+  kernel_build_core:
     name: 内核构建核心 - ${{ github.event.inputs.kernel_to_build }}${{ needs.version_probe.outputs.job_name_suffix }}
     needs: version_probe
     runs-on: ubuntu-latest
@@ -142,6 +142,7 @@ jobs:
       release_title: ${{ steps.prepare_release_outputs.outputs.release_title_name }}
       final_kernel_local_version_output: ${{ steps.generate_version_elements.outputs.final_kernel_local_version_for_body }}
       current_build_date_formatted_output: ${{ steps.generate_version_elements.outputs.current_build_date_formatted_for_body }}
+      artifact_naming_suffix_output: ${{ steps.generate_version_elements.outputs.artifact_naming_suffix_for_prepare }}
       parsed_kernel_version_output: ${{ steps.parse_kernel.outputs.parsed_kernel_version }}
       parsed_sub_level_output: ${{ steps.parse_kernel.outputs.parsed_sub_level }}
       sukisu_version_from_build_job: ${{ needs.version_probe.outputs.sukisu_version }}
@@ -209,8 +210,8 @@ jobs:
           _current_date_formatted_for_body=$(date +"%Y年%m月%d日")
 
           if [[ -n "$USER_PROVIDED_CUSTOM_SUFFIX" ]]; then
-            _actual_localversion_for_kernel="-$USER_PROVIDED_CUSTOM_SUFFIX" # 内核 LOCALVERSION 使用自定义后缀
-            _artifact_naming_suffix_for_prepare="$USER_PROVIDED_CUSTOM_SUFFIX" # Artifact 后缀也使用自定义后缀
+            _actual_localversion_for_kernel="-$USER_PROVIDED_CUSTOM_SUFFIX"
+            _artifact_naming_suffix_for_prepare="$USER_PROVIDED_CUSTOM_SUFFIX" 
             echo "版本要素: 用户自定义后缀为 '$_actual_localversion_for_kernel' (用于内核) 和 '$_artifact_naming_suffix_for_prepare' (用于文件名)"
           else
             _kernel_fixed_part=""
@@ -223,17 +224,16 @@ jobs:
             
             _random_hex_11=$(head /dev/urandom | LC_ALL=C tr -dc 'a-f0-9' | head -c 11 || echo "randhex")
             _random_digits_8=$(head /dev/urandom | LC_ALL=C tr -dc '0-9' | head -c 8 || echo "randdig")
-            _actual_localversion_for_kernel="${_kernel_fixed_part}-gd${_random_hex_11}-ab${_random_digits_8}" # 内核 LOCALVERSION 使用GKI风格随机后缀
-            _artifact_naming_suffix_for_prepare="-${_current_date_yyyymmdd}" # Artifact 后缀使用日期
+            _actual_localversion_for_kernel="${_kernel_fixed_part}-gd${_random_hex_11}-ab${_random_digits_8}"
+            _artifact_naming_suffix_for_prepare="-${_current_date_yyyymmdd}"
             echo "版本要素: 无自定义后缀。内核 LOCALVERSION 后缀: '$_actual_localversion_for_kernel', Artifact 命名后缀: '$_artifact_naming_suffix_for_prepare'"
           fi
           
           echo "FINAL_KERNEL_LOCAL_VERSION=${_actual_localversion_for_kernel}" >> "$GITHUB_ENV"
-          echo "ARTIFACT_NAME_SUFFIX_PART_ENV=${_artifact_naming_suffix_for_prepare}" >> "$GITHUB_ENV" # 给 prepare_release_outputs 使用
+          echo "ARTIFACT_NAME_SUFFIX_PART_ENV=${_artifact_naming_suffix_for_prepare}" >> "$GITHUB_ENV" 
           echo "final_kernel_local_version_for_body=${_actual_localversion_for_kernel}" >> "$GITHUB_OUTPUT"
           echo "current_build_date_formatted_for_body=${_current_date_formatted_for_body}" >> "$GITHUB_OUTPUT"
           echo "artifact_naming_suffix_for_prepare=${_artifact_naming_suffix_for_prepare}" >> "$GITHUB_OUTPUT"
-
 
       - name: KPM策略调整
         id: kpm_settings
@@ -265,16 +265,16 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          # B 工作流包含 upgrade -y, A 工作流不含。为对齐B的稳定性，可以考虑加入，但通常CI中不需要频繁upgrade。此处保持A的简洁。
+          sudo apt-get upgrade -y 
           sudo apt-get install -yq --no-install-recommends ccache python3 git curl time libssl-dev flex
 
       - name: 编译缓存配置
         run: |
           set -euo pipefail
-          mkdir -p ~/.cache/bazel # B 工作流Bazel命令使用此路径
+          mkdir -p ~/.cache/bazel 
           ccache --version
-          ccache --max-size=2G
-          ccache --set-config=compression=true
+          ccache --max-size=2G 
+          ccache --set-config=compression=true 
           if ccache --version | grep -q 'Zstd'; then
             ccache --set-config=compression_type=zstd
             echo "ccache: Zstd compression enabled."
@@ -304,8 +304,8 @@ jobs:
         run: |
           set -euo pipefail
           AOSP_MIRROR=https://android.googlesource.com
-          BUILD_TOOLS_BRANCH=main-kernel-build-2024 # B 工作流中是 main-kernel-build-2024
-          MKBOOTIMG_BRANCH=main # B 工作流中也是 main
+          BUILD_TOOLS_BRANCH=main-kernel-build-2024 
+          MKBOOTIMG_BRANCH=main 
           echo "Downloading prebuilt toolchain..."
           git clone "$AOSP_MIRROR/kernel/prebuilts/build-tools" -b "$BUILD_TOOLS_BRANCH" --depth 1 kernel-build-tools
           git clone "$AOSP_MIRROR/platform/system/tools/mkbootimg" -b "$MKBOOTIMG_BRANCH" --depth 1 mkbootimg
@@ -322,7 +322,7 @@ jobs:
           set -euo pipefail
           KEY_DIR="$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb"
           mkdir -p "$KEY_DIR"
-          echo "Generating a test signing key (aligning with Workflow B)."
+          echo "Generating a test signing key."
           openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > "$KEY_DIR/testkey_rsa2048.pem"
           echo "BOOT_SIGN_KEY_PATH=$KEY_DIR/testkey_rsa2048.pem" >> $GITHUB_ENV
           echo "Test signing key generated and path set."
@@ -370,28 +370,24 @@ jobs:
             mkdir -p "${{ env.KERNEL_SRC_ROOT }}"
             cd "${{ env.KERNEL_SRC_ROOT }}"
             
-            # 对齐 B 工作流的 manifest 分支名构造方式
             _MANIFEST_BRANCH_FOR_INIT="common-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
-            # 如果 os_patch_level 有效且不为仅占位的 "_"，则附加
             if [[ -n "${{ env.SELECTED_OS_PATCH_LEVEL }}" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "_" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "X" ]]; then
                 _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
-            # 否则，检查是否为 LTS 版本（这是 A 工作流的逻辑，如果 B 也隐式处理了，则保留是合理的）
             elif [[ "${{ github.event.inputs.kernel_to_build }}" == *"_X_lts_"* || "${{ github.event.inputs.kernel_to_build }}" == *"_lts_"* ]]; then
                 _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-lts"
             fi
             echo "Using manifest branch: $_MANIFEST_BRANCH_FOR_INIT"
-            ${{ env.REPO }} init --depth=1 -u https://android.googlesource.com/kernel/manifest -b $_MANIFEST_BRANCH_FOR_INIT --repo-rev=v2.16
+            ${{ env.REPO }} init --depth=1 -u https://android.googlesource.com/kernel/manifest -b "$_MANIFEST_BRANCH_FOR_INIT" --repo-rev=v2.16
 
             DEFAULT_MANIFEST_PATH=".repo/manifests/default.xml"
             if [ ! -f "$DEFAULT_MANIFEST_PATH" ] && [ -f .repo/manifest.xml ]; then
               DEFAULT_MANIFEST_PATH=.repo/manifest.xml
             fi
             
-            # 保持 A 工作流中更精确的 deprecated 分支处理逻辑
             COMMON_PROJECT_REVISION_IN_MANIFEST=$(grep 'project path="common"' "$DEFAULT_MANIFEST_PATH" | sed -n 's/.*revision="\([^"]*\)".*/\1/p' | head -n 1)
             if [ -z "$COMMON_PROJECT_REVISION_IN_MANIFEST" ]; then
                 COMMON_PROJECT_REVISION_IN_MANIFEST=$(grep 'project path="kernel/common"' "$DEFAULT_MANIFEST_PATH" | sed -n 's/.*revision="\([^"]*\)".*/\1/p' | head -n 1)
-                if [ -z "$COMMON_PROJECT_REVISION_IN_MANIFEST" ]; then # Fallback
+                if [ -z "$COMMON_PROJECT_REVISION_IN_MANIFEST" ]; then 
                   COMMON_PROJECT_REVISION_IN_MANIFEST=$(echo "$_MANIFEST_BRANCH_FOR_INIT" | sed 's/^common-//')
                 fi
             fi
@@ -402,7 +398,6 @@ jobs:
               sed -i "/project path=\"kernel\/common\"/s|revision=\"$COMMON_PROJECT_REVISION_IN_MANIFEST\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST\"|" "$DEFAULT_MANIFEST_PATH"
             fi
             
-            # 移除 --current-branch 以对齐 B 工作流
             ${{ env.REPO }} --trace sync -c -j$(nproc --all) --no-tags --fail-fast
 
       - name: SukiSU分支设定
@@ -446,11 +441,9 @@ jobs:
             echo "::warning::Invalid SukiSU version ('$final_suki_version_num_for_env'). Using 'NoVer'."
           fi
 
-      - name: SUSFS特性增强 # 名称简化 (原: 应用SUSFS补丁 (旧版逻辑))
+      - name: SUSFS特性增强
         working-directory: ${{ env.KERNEL_SRC_ROOT }} 
         shell: bash
-        # 保持启用，因为这是您确认 susfs 正常工作时的状态
-        # 内部的 patch 命令使用 || true 来对齐 B 工作流的容错性
         run: |
           echo "[SUSFS Diag] Applying SUSFS patches from susfs4ksu..."
           mkdir -p ./common/fs && mkdir -p ./common/include/linux
@@ -502,7 +495,7 @@ jobs:
           fi
           echo "[SUSFS Diag] SUSFS patching finished."
 
-      - name: 附加特性补丁 # 名称简化，改为串行
+      - name: 附加特性补丁
         shell: bash
         run: |
           set -euo pipefail 
@@ -513,11 +506,10 @@ jobs:
           HOOKS_PATCH_FILE="${GITHUB_WORKSPACE}/SukiSU_patch/hooks/syscall_hooks.patch"
           if [ -f "$HOOKS_PATCH_FILE" ]; then
             cp "$HOOKS_PATCH_FILE" ./syscall_hooks.patch
-            patch -p1 -F 3 < syscall_hooks.patch || echo "::warning::SukiSU hooks patch failed or applied with fuzz. Continuing..." # 改为警告
+            patch -p1 -F 3 < syscall_hooks.patch || echo "::warning::SukiSU hooks patch failed or applied with fuzz. Continuing..."
           else
             echo "::error::SukiSU hooks patch file not found: $HOOKS_PATCH_FILE"; exit 1; 
           fi
-          echo "SukiSU hooks patch process finished."
           
           if [[ "${{ github.event.inputs.use_zram }}" == "true" ]]; then
             echo "Applying additional ZRAM compression patches..."
@@ -529,16 +521,15 @@ jobs:
             if [ -d "$src_lib" ]; then mkdir -p "$dst_lib"; if [ -n "$(ls -A "$src_lib" 2>/dev/null)" ]; then cp -r "${src_lib}/." "$dst_lib/" || echo "::warning::lz4k lib copy failed"; fi; fi
             src_crypto="${ZRAM_PATCH_BASE}/lz4k/crypto"; dst_crypto="./crypto"
             if [ -d "$src_crypto" ]; then mkdir -p "$dst_crypto"; if [ -n "$(ls -A "$src_crypto" 2>/dev/null)" ]; then cp -r "${src_crypto}/." "$dst_crypto/" || echo "::warning::lz4k crypto copy failed"; fi
-            else echo "::warning::ZRAM crypto src NOT FOUND: $src_crypto. This might be an issue if ZRAM relies on it."; fi
+            else echo "::warning::ZRAM crypto src NOT FOUND: $src_crypto."; fi
             if [ -d "${ZRAM_PATCH_BASE}/lz4k_oplus" ]; then mkdir -p ./lib; cp -r "${ZRAM_PATCH_BASE}/lz4k_oplus" ./lib/ || echo "::warning::lz4k_oplus copy to lib failed"; fi
             
             LZ4KD_PATCH="${ZRAM_PATCH_BASE}/zram_patch/${{env.SELECTED_KERNEL_VERSION}}/lz4kd.patch"
             if [ -f "$LZ4KD_PATCH" ]; then cp "$LZ4KD_PATCH" ./lz4kd.patch; patch -p1 -F 3 < lz4kd.patch || echo "::warning::lz4kd patch failed for ${{ env.SELECTED_KERNEL_VERSION }}. Continuing..."; fi
             LZ4KOPLUS_PATCH="${ZRAM_PATCH_BASE}/zram_patch/${{env.SELECTED_KERNEL_VERSION}}/lz4k_oplus.patch"
             if [ -f "$LZ4KOPLUS_PATCH" ]; then cp "$LZ4KOPLUS_PATCH" ./lz4k_oplus.patch; patch -p1 -F 3 < lz4k_oplus.patch || echo "::warning::lz4k_oplus patch failed for ${{ env.SELECTED_KERNEL_VERSION }}. Continuing..."; fi
-            echo "ZRAM compression patches process finished."
           else
-            echo "Skipping ZRAM compression patches as use_zram is false."
+            echo "Skipping ZRAM compression patches."
           fi
 
           echo "Applying hide stuff patch..."
@@ -546,11 +537,11 @@ jobs:
           HIDE_PATCH_FILE="${GITHUB_WORKSPACE}/SukiSU_patch/69_hide_stuff.patch"
           if [ -f "$HIDE_PATCH_FILE" ]; then
             cp "$HIDE_PATCH_FILE" ./hide_stuff.patch
-            patch -p1 -F 3 < hide_stuff.patch || echo "::warning::Hide stuff patch failed or applied with fuzz. Continuing..." # 改为警告
+            patch -p1 -F 3 < hide_stuff.patch || echo "::warning::Hide stuff patch failed or applied with fuzz. Continuing..."
           else
             echo "::error::Hide stuff patch file not found: $HIDE_PATCH_FILE"; exit 1;
           fi
-          echo "Hide stuff patch process finished."
+          echo "附加特性补丁应用完毕。"
 
       - name: ZRAM功能配置
         if: ${{ github.event.inputs.use_zram == 'true' }}
@@ -560,9 +551,7 @@ jobs:
           if [ ! -f "$CONFIG_FILE_PATH" ]; then echo "::error::gki_defconfig not found for ZRAM config"; exit 1; fi
           update_cfg() {
             local k="$1"; local v="$2"; local file="$3"
-            sed -i "/^${k}=/d" "$file"
-            sed -i "/^# ${k} is not set/d" "$file"
-            echo "${k}=${value}" >> "$file"
+            sed -i "/^${k}=/d" "$file"; sed -i "/^# ${k} is not set/d" "$file"; echo "${k}=${value}" >> "$file"
           }
           update_cfg "CONFIG_ZSMALLOC" "y" "$CONFIG_FILE_PATH"
           update_cfg "CONFIG_ZRAM" "y" "$CONFIG_FILE_PATH"
@@ -603,32 +592,22 @@ jobs:
           MKCOMPILE_H_SCRIPT="./common/scripts/mkcompile_h"
 
           if [ -f "$GKI_DEFCONFIG" ]; then
-            # CONFIG_LOCALVERSION 将通过 setlocalversion 脚本在编译时动态生成或使用env.FINAL_KERNEL_LOCAL_VERSION
-            # 因此这里确保 defconfig 中 CONFIG_LOCALVERSION 为空，并且 LOCALVERSION_AUTO 未设置
-            sed -i '/^CONFIG_LOCALVERSION=/d' "$GKI_DEFCONFIG"; echo 'CONFIG_LOCALVERSION=""' >> "$GKI_DEFCONFIG"
+            sed -i '/^CONFIG_LOCALVERSION=/d' "$GKI_DEFCONFIG"; echo "CONFIG_LOCALVERSION=\"${{ env.FINAL_KERNEL_LOCAL_VERSION }}\"" >> "$GKI_DEFCONFIG"
             sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$GKI_DEFCONFIG"; echo '# CONFIG_LOCALVERSION_AUTO is not set' >> "$GKI_DEFCONFIG"
             sort -u "$GKI_DEFCONFIG" -o "$GKI_DEFCONFIG"
-            echo "Defconfig: CONFIG_LOCALVERSION cleared, CONFIG_LOCALVERSION_AUTO unset."
+            echo "Defconfig: CONFIG_LOCALVERSION set to '${{ env.FINAL_KERNEL_LOCAL_VERSION }}', CONFIG_LOCALVERSION_AUTO unset."
           fi
 
           if [ -f "$SLS" ]; then
-            # 如果 env.FINAL_KERNEL_LOCAL_VERSION (由 generate_version_elements 设置) 非空，则用它覆盖 setlocalversion
-            if [[ -n "${{ env.FINAL_KERNEL_LOCAL_VERSION }}" ]]; then
-              echo '#!/bin/sh' > "$SLS"
-              echo 'echo "${{ env.FINAL_KERNEL_LOCAL_VERSION }}"' >> "$SLS"
-              chmod +x "$SLS"
-              echo "setlocalversion script updated to output: ${{ env.FINAL_KERNEL_LOCAL_VERSION }}"
-            else
-              # 如果 FINAL_KERNEL_LOCAL_VERSION 为空 (例如用户提供了空的 custom_version_suffix 且我们没有默认生成随机串给它)
-              # 则让 setlocalversion 走默认的 git describe 逻辑，但确保移除 -dirty
-              sed -i 's/-dirty//g' "$SLS" || true
-              echo "setlocalversion: FINAL_KERNEL_LOCAL_VERSION is empty, ensured -dirty is removed from default logic (if present)."
-            fi
+            # setlocalversion 脚本直接输出 FINAL_KERNEL_LOCAL_VERSION
+            echo '#!/bin/sh' > "$SLS"
+            echo 'echo "${{ env.FINAL_KERNEL_LOCAL_VERSION }}"' >> "$SLS"
+            chmod +x "$SLS"
+            echo "setlocalversion script updated to output: ${{ env.FINAL_KERNEL_LOCAL_VERSION }}"
           else
             echo "::warning::setlocalversion script not found at $SLS."
           fi
           
-          # 固定 mkcompile_h 中的时间戳 (对齐 B 工作流)
           if [ -f "$MKCOMPILE_H_SCRIPT" ]; then
             echo "Hardcoding timestamp in $MKCOMPILE_H_SCRIPT..."
             perl -pi -e 's{UTS_VERSION="\$\(echo \$UTS_VERSION \$CONFIG_FLAGS \$TIMESTAMP \| cut -b -\$UTS_LEN\)"}{UTS_VERSION="#1 SMP PREEMPT Sat Apr 20 04:20:00 UTC 2024"}' "$MKCOMPILE_H_SCRIPT"
@@ -637,7 +616,6 @@ jobs:
             echo "::warning:: mkcompile_h script not found at $MKCOMPILE_H_SCRIPT"
           fi
 
-          # Bazel 特有的调整
           if [ ! -f "./build/build.sh" ]; then 
             if [ -f "./common/BUILD.bazel" ]; then sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' "./common/BUILD.bazel"; fi
             find ./common/android/ -name "abi_gki_protected_exports_*" -delete
@@ -653,11 +631,20 @@ jobs:
           check_cfg() {
             local k="$1"; local ev="$2"; local c="${3:-false}"
             if ! grep -q "^${k}=${ev}$" "$GKI_CHECK"; then
-              if [[ "$c" == "true" ]]; then echo "::error::CRITICAL: ${k}!= ${ev}"; CRIT_FAIL=1
+              # 如果是CONFIG_LOCALVERSION，由于我们设置的是 env.FINAL_KERNEL_LOCAL_VERSION，这里检查会失败，所以特殊处理或接受警告
+              if [[ "$k" == "CONFIG_LOCALVERSION" && "$ev" == "\"\"" ]]; then
+                 if grep -q "^CONFIG_LOCALVERSION=\"${{env.FINAL_KERNEL_LOCAL_VERSION}}\"$" "$GKI_CHECK"; then
+                    echo "CONFIG_LOCALVERSION set to '${{env.FINAL_KERNEL_LOCAL_VERSION}}' OK."
+                 else
+                    echo "::warning::CONFIG_LOCALVERSION is not '${{env.FINAL_KERNEL_LOCAL_VERSION}}', actual: $(grep "^CONFIG_LOCALVERSION=" "$GKI_CHECK")"
+                 fi
+              elif [[ "$c" == "true" ]]; then echo "::error::CRITICAL: ${k}!= ${ev}"; CRIT_FAIL=1
               else echo "::warning::${k}!=${ev}"; fi
             else echo "${k}=${ev} OK."; fi
           }
           check_cfg "CONFIG_KSU" "y" "true"; check_cfg "CONFIG_KSU_SUSFS" "y" "false"; check_cfg "CONFIG_MODVERSIONS" "y" "false"
+          check_cfg "CONFIG_LOCALVERSION" "\"${{env.FINAL_KERNEL_LOCAL_VERSION}}\"" "false" # 检查实际设置的 LOCALVERSION
+          check_cfg "CONFIG_LOCALVERSION_AUTO" "# CONFIG_LOCALVERSION_AUTO is not set" "false" # 检查是否被注释
           if [[ "${{ github.event.inputs.use_zram }}" == "true" ]]; then
             check_cfg "CONFIG_ZRAM" "y" "true"; check_cfg "CONFIG_CRYPTO_LZ4K" "y" "true"
           fi
@@ -666,8 +653,7 @@ jobs:
       - name: 执行内核编译
         uses: nick-fields/retry@v3
         env:
-          # BAZEL_PROFILE_PATH_IN_WORKSPACE: "${{ github.workspace }}/${{ env.BAZEL_PROFILE_FILENAME }}" # B 工作流不使用 profile
-          BAZEL_DISK_CACHE_PATH_FOR_BUILD: "/home/runner/.cache/bazel" # 对齐 B 工作流
+          BAZEL_DISK_CACHE_PATH_FOR_BUILD: "/home/runner/.cache/bazel"
         with:
           timeout_minutes: 75
           max_attempts: 2
@@ -682,10 +668,8 @@ jobs:
               if [ -f "$B_SCRIPT" ]; then
                 echo "Using legacy build.sh script for compilation..."
                 LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 BUILD_CONFIG=common/build.config.gki.aarch64 CC="/usr/bin/ccache clang" build/build.sh || { echo "::error::Legacy build.sh failed."; exit 1; }
-                echo "Legacy build.sh completed."
               else
                 echo "Using Bazel build system for compilation..."
-                # 对齐 B 工作流的 Bazel 命令 (更简单)
                 CMD_TO_EXEC="tools/bazel build \
                   --disk_cache=${BAZEL_DISK_CACHE_PATH_FOR_BUILD} \
                   --config=fast \
@@ -693,8 +677,7 @@ jobs:
                   //common:kernel_aarch64_dist"
                 
                 echo "Executing Bazel command via bash -c: ${CMD_TO_EXEC}"
-                bash -c "${CMD_TO_EXEC}" || { echo "::error::Bazel build failed."; exit 1; } # 移除 /usr/bin/time -v 以更接近 B
-                echo "Bazel build completed."
+                bash -c "${CMD_TO_EXEC}" || { echo "::error::Bazel build failed."; exit 1; }
               fi
             }
             execute_build_process
@@ -705,16 +688,14 @@ jobs:
               echo "Last 10 lines of ccache log:"
               tail -n 10 "${CCACHE_LOGFILE}" || true
             fi
-            if [ -f "${{ github.workspace }}/${{ env.BAZEL_PROFILE_FILENAME }}" ]; then # 即使不用--profile，也检查一下
+            if [ -f "${{ github.workspace }}/${{ env.BAZEL_PROFILE_FILENAME }}" ]; then
                 echo "Bazel profile found at: ${{ github.workspace }}/${{ env.BAZEL_PROFILE_FILENAME }}"
             else
-                echo "Bazel profile file not found (expected if --profile was not used)."
+                echo "Bazel profile file not found."
             fi
             echo "Kernel compilation step finished."
       
-      # ... (KPM 修补, 复制内核映像, 验证内核镜像, 上传 Artifact, 清理 步骤保持与您当前工作流一致) ...
-
-      - name: 修补内核映像 (KPM A12/A13)
+      - name: KPM映像处理 (旧版)
         if: env.EFFECTIVE_USE_KPM == 'true' && (env.SELECTED_ANDROID_VERSION == 'android12' || env.SELECTED_ANDROID_VERSION == 'android13') && env.SELECTED_KERNEL_VERSION != '6.6'
         run: |
           set -euo pipefail
@@ -727,7 +708,7 @@ jobs:
             if [ -f "oImage" ]; then mv Image Image.o; mv oImage Image; fi
           fi
 
-      - name: 修补内核映像 (KPM A14/A15)
+      - name: KPM映像处理 (新版)
         if: env.EFFECTIVE_USE_KPM == 'true' && (env.SELECTED_ANDROID_VERSION == 'android14' || env.SELECTED_ANDROID_VERSION == 'android15') && env.SELECTED_KERNEL_VERSION != '6.6'
         run: |
           set -euo pipefail
@@ -746,7 +727,7 @@ jobs:
           IMG_SRC=""
           LGC_IMG="${{ env.KERNEL_SRC_ROOT }}/out/${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}/dist/Image"
           BZL_IMG1="${{ env.KERNEL_SRC_ROOT }}/bazel-bin/common/kernel_aarch64/Image"
-          BZL_IMG2="${{ env.KERNEL_SRC_ROOT }}/out/android-gki/dist/Image" # Fallback for some GKI build outputs
+          BZL_IMG2="${{ env.KERNEL_SRC_ROOT }}/out/android-gki/dist/Image"
           if [ -f "$LGC_IMG" ]; then IMG_SRC="$LGC_IMG"
           elif [ -f "$BZL_IMG1" ]; then IMG_SRC="$BZL_IMG1"
           elif [ -f "$BZL_IMG2" ]; then IMG_SRC="$BZL_IMG2"
@@ -776,10 +757,10 @@ jobs:
       - name: 构建产物上传
         uses: actions/upload-artifact@v4
         with:
-          name: |
-            ${{ (env.SUKI_VERSION_NUM != 'NoVer' && env.SUKI_VERSION_NUM != '' && env.SUKI_VERSION_NUM != '00000') &&
+          name: | # 使用 env.ARTIFACT_NAME_SUFFIX_PART_ENV
+            ${{ (env.SUKI_VERSION_NUM != 'NoVer' && env.SUKI_VERSION_NUM != '' && env.SUKI_VERSION_NUM != '00000' && github.event.inputs.custom_version_suffix == '') &&
                 format('AnyKernel3_SukiSUUltra_{0}_{1}-{2}{3}', env.SUKI_VERSION_NUM, env.SELECTED_KERNEL_VERSION, env.SELECTED_SUB_LEVEL, env.ARTIFACT_NAME_SUFFIX_PART_ENV) ||
-                format('AnyKernel3_SukiSU_{0}_{1}-{2}{3}', 'NoVer', env.SELECTED_KERNEL_VERSION, env.SELECTED_SUB_LEVEL, env.ARTIFACT_NAME_SUFFIX_PART_ENV) }}
+                format('AnyKernel3_SukiSU_{0}_{1}-{2}{3}', github.event.inputs.custom_version_suffix == '' && 'NoVer_GKI' || format('NoVer_Custom-{0}', github.event.inputs.custom_version_suffix), env.SELECTED_KERNEL_VERSION, env.SELECTED_SUB_LEVEL, github.event.inputs.custom_version_suffix == '' && env.ARTIFACT_NAME_SUFFIX_PART_ENV || '') }}
           path: ${{ github.workspace }}/AnyKernel3
           if-no-files-found: error
 
@@ -788,7 +769,6 @@ jobs:
         run: |
           set -euo pipefail
           if [ -d "/home/runner/.cache/bazel" ]; then rm -rf /home/runner/.cache/bazel || echo "::warning::Bazel disk cache removal failed (/home/runner/.cache/bazel)."; fi
-          # $HOME/.cache/bazel is the same as above for runner user
           ccache -s
 
       - name: 诊断日志归档
@@ -809,28 +789,31 @@ jobs:
           _svn="${{ env.SUKI_VERSION_NUM }}"; 
           _kv="${{ env.SELECTED_KERNEL_VERSION }}"; 
           _sl="${{ env.SELECTED_SUB_LEVEL }}"; 
-          # ARTIFACT_NAME_SUFFIX_PART_ENV 来自 generate_version_elements 步骤
-          _suf="${{ env.ARTIFACT_NAME_SUFFIX_PART_ENV }}" 
+          _suf_for_artifact_name="${{ needs.kernel_build_core.outputs.artifact_naming_suffix_output }}" 
           _base="SukiSUUltra"; _tit=""; _tag=""
 
-          if [[ "$_svn" != "NoVer" && "$_svn" =~ ^[0-9]+$ && "$_svn" != "00000" && "$_svn" != "10000" ]]; then
-            _aname="AnyKernel3_${_base}_${_svn}_${_kv}-${_sl}${_suf}"; 
-            _tit="${_base}-${_svn}"; 
-            _tag="${_base}-${_svn}_${_kv}-${_sl}${_suf:-$(date +%s)}"
-          else
-            # 如果 SUKI_VERSION_NUM 是 NoVer, 确保 _suf 有值 (来自 artifact_naming_suffix_for_prepare)
-            _aname="AnyKernel3_${_base}_NoVer_${_kv}-${_sl}${_suf}"; 
-            _tit="${_base}-NoVer${_suf}"; 
-            _tag="${_base}-NoVer_${_kv}-${_sl}${_suf}"
+          # 优先使用 SukiSU 版本号命名，如果提供了自定义后缀，则标题和标签中体现自定义后缀
+          if [[ "$_svn" != "NoVer" && "$_svn" =~ ^[0-9]+$ && -z "${{ github.event.inputs.custom_version_suffix }}" ]]; then
+            _aname="AnyKernel3_${_base}_${_svn}_${_kv}-${_sl}${_suf_for_artifact_name}"
+            _tit="${_base}-${_svn}"
+            _tag="${_base}-${_svn}_${_kv}-${_sl}${_suf_for_artifact_name}"
+          else # 无有效 SukiSU 版本号 或 有自定义后缀
+            _effective_suffix_for_title_tag="${{ github.event.inputs.custom_version_suffix }}"
+            if [[ -z "$_effective_suffix_for_title_tag" ]]; then # 如果自定义后缀也为空，则使用日期后缀
+                _effective_suffix_for_title_tag="${_suf_for_artifact_name}" 
+            fi
+            _aname="AnyKernel3_${_base}_NoVer_${_kv}-${_sl}${_effective_suffix_for_title_tag}"
+            _tit="${_base}-NoVer${_effective_suffix_for_title_tag}"
+            _tag="${_base}-NoVer_${_kv}-${_sl}${_effective_suffix_for_title_tag}"
           fi
           
           echo "artifact_name_for_release=$(echo "$_aname" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_tag_name=$(echo "$_tag" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_title_name=${_tit}" >> "$GITHUB_OUTPUT"
 
-  create_release: # Job name changed
+  create_release:
     name: 创建发行版 
-    needs: kernel_build_core # Needs changed
+    needs: kernel_build_core
     permissions:
       contents: write 
     runs-on: ubuntu-latest
@@ -869,8 +852,7 @@ jobs:
             - 内核版本构建输入: `${{ github.event.inputs.kernel_to_build }}`
             - SukiSU 版本 (计算): `${{ needs.kernel_build_core.outputs.sukisu_version_from_build_job }}`
             - SukiSU 功能分支: `${{ github.event.inputs.kernelsu_branch }}`
-            - 自定义版本后缀 (内核LOCALVERSION): `${{ github.event.inputs.custom_version_suffix == '' && format('(GKI风格随机: %s)', needs.kernel_build_core.outputs.final_kernel_local_version_output) || format('自定义: %s', needs.kernel_build_core.outputs.final_kernel_local_version_output) }}`
-            - 内核名 (uname -r 风格): `${{ needs.kernel_build_core.outputs.parsed_kernel_version_output }}.${{ needs.kernel_build_core.outputs.parsed_sub_level_output }}${{ needs.kernel_build_core.outputs.final_kernel_local_version_output }}`
+            - 内核名 (LOCALVERSION): `${{ needs.kernel_build_core.outputs.parsed_kernel_version_output }}.${{ needs.kernel_build_core.outputs.parsed_sub_level_output }}${{ needs.kernel_build_core.outputs.final_kernel_local_version_output }}`
             - 构建日期: `${{ needs.kernel_build_core.outputs.current_build_date_formatted_output }}`
             **构建选项:**
             - 使用ZRAM: `${{ github.event.inputs.use_zram }}`
