@@ -140,7 +140,6 @@ jobs:
       gki_defconfig_path_output: ${{ steps.set_core_paths.outputs.gki_defconfig_path_output }}
       effective_kpm_setting: ${{ steps.kpm_settings.outputs.effective_kpm_value }}
     env:
-      # ***** YAML 语法修正开始 *****
       CCACHE_COMPILERCHECK: '%compiler% -dumpmachine; %compiler% -dumpversion'
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
@@ -149,7 +148,6 @@ jobs:
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json
       DEBIAN_FRONTEND: noninteractive
-      # ***** YAML 语法修正结束 *****
 
     steps:
       - name: 验证输入参数 (基本)
@@ -180,9 +178,11 @@ jobs:
 
       - name: 生成版本后缀和日期
         id: generate_suffixes
-        env:
+        env: # ***** YAML 语法修正开始 *****
           USER_PROVIDED_SUFFIX: ${{ github.event.inputs.custom_version_suffix }}
-          SELECTED_AV_ENV: ${{ env.SELECTED_ANDROID_VERSION }}; SELECTED_KV_ENV: ${{ env.SELECTED_KERNEL_VERSION }}
+          SELECTED_AV_ENV: ${{ env.SELECTED_ANDROID_VERSION }}
+          SELECTED_KV_ENV: ${{ env.SELECTED_KERNEL_VERSION }}
+          # ***** YAML 语法修正结束 *****
         run: |
           set -euo pipefail; final_kernel_local_version=""; artifact_name_suffix_part=""
           current_date_yyyymmdd=$(date +%Y%m%d); current_date_formatted=$(date +"%Y年%m月%d日")
@@ -350,7 +350,7 @@ jobs:
           SUSFS_FS_SRC_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/fs"
           SUSFS_FS_DEST_PATH="./common/fs/" # 相对于 working-directory
           if [ -d "$SUSFS_FS_SRC_PATH" ]; then
-            if [ -n "$(ls -A "$SUSFS_FS_SRC_PATH" 2>/dev/null)" ]; then
+            if [ -n "$(ls -A "$SUSFS_FS_SRC_PATH" 2>/dev/null)" ]; then # ls -A 的错误输出到 /dev/null 以避免在目录不存在时意外中止
               echo "Copying SUSFS fs dir contents: $SUSFS_FS_SRC_PATH to $SUSFS_FS_DEST_PATH"
               cp -r ${SUSFS_FS_SRC_PATH}/* "$SUSFS_FS_DEST_PATH" || echo "::warning::[SUSFS Diag] SUSFS fs dir copy FAILED. CONTINUING."
             else
@@ -373,45 +373,49 @@ jobs:
             echo "::warning::[SUSFS Diag] SUSFS source include/linux directory not found: $SUSFS_INCLUDE_SRC_PATH."
           fi
 
-          # 进入 common 目录进行 patch 操作
-          cd ./common || { echo "::error::[SUSFS Diag] Failed to cd into ./common. Aborting SUSFS patch application in common."; exit 1; } # 如果连common目录都进不去，后续patch无意义
-
-          SUSFS_PATCH_FILENAME_IN_COMMON="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
-          if [ -f "./${SUSFS_PATCH_FILENAME_IN_COMMON}" ]; then # 此判断在 KERNEL_SRC_ROOT/common 下执行
-            echo "[SUSFS Diag] Attempting to apply patch: ./${SUSFS_PATCH_FILENAME_IN_COMMON} (in $(pwd))"
-            patch_output_file=$(mktemp)
-            echo "--- [SUSFS Diag] Main Patch Output (Command: patch -p1 --fuzz=3 < ./${SUSFS_PATCH_FILENAME_IN_COMMON}) ---"
-            if patch -p1 --fuzz=3 < "./${SUSFS_PATCH_FILENAME_IN_COMMON}" > "$patch_output_file" 2>&1; then
-              echo "[SUSFS Diag] Main SUSFS patch applied (exit code 0 - may include fuzz)."
-            else
-              patch_exit_code=$?
-              echo "::warning::[SUSFS Diag] Main SUSFS patch command exited with code $patch_exit_code (1:rejections, 2:trouble). CONTINUING."
-            fi
-            cat "$patch_output_file" || echo "[SUSFS Diag] No patch output for main patch."
-            rm -f "$patch_output_file"
-            echo "--- [SUSFS Diag] Main Patch Output End ---"
+          current_dir_before_cd_common=$(pwd) # 保存当前目录 (KERNEL_SRC_ROOT)
+          # 尝试进入 KERNEL_SRC_ROOT/common 目录
+          if ! cd ./common; then
+            echo "::error::[SUSFS Diag] Failed to cd into ./common. Subsequent patch may fail or apply to wrong directory."
+            # 在此诊断模式下，即使 cd 失败也尝试继续，但后续 patch 路径可能不正确
           else
-            echo "::warning::[SUSFS Diag] Main SUSFS patch file ./${SUSFS_PATCH_FILENAME_IN_COMMON} not found in $(pwd). This might be intended."
-          fi
-          
-          FORMATTED_BRANCH_FOR_FIX_COMPARE="${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
-          if [[ "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-08" || "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-09" ]]; then
-            echo "[SUSFS Diag] Applying fix for 6.6 kernel (in $(pwd))..."
-            curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/fix/fix6.6.patch -o fix6.6.patch
-            patch_output_file_66=$(mktemp)
-            echo "--- [SUSFS Diag] 6.6 Fix Patch Output (Command: patch -p1 < fix6.6.patch) ---"
-            if patch -p1 < fix6.6.patch > "$patch_output_file_66" 2>&1; then
-              echo "[SUSFS Diag] 6.6 fix patch applied (exit code 0)."
+            SUSFS_PATCH_FILENAME_IN_COMMON="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
+            if [ -f "./${SUSFS_PATCH_FILENAME_IN_COMMON}" ]; then # 此判断在 KERNEL_SRC_ROOT/common 下执行
+              echo "[SUSFS Diag] Attempting to apply patch: ./${SUSFS_PATCH_FILENAME_IN_COMMON} (in $(pwd))"
+              patch_output_file=$(mktemp)
+              echo "--- [SUSFS Diag] Main Patch Output (Command: patch -p1 --fuzz=3 < ./${SUSFS_PATCH_FILENAME_IN_COMMON}) ---"
+              if patch -p1 --fuzz=3 < "./${SUSFS_PATCH_FILENAME_IN_COMMON}" > "$patch_output_file" 2>&1; then
+                echo "[SUSFS Diag] Main SUSFS patch applied (exit code 0 - may include fuzz)."
+              else
+                patch_exit_code=$?
+                echo "::warning::[SUSFS Diag] Main SUSFS patch command exited with code $patch_exit_code (1:rejections, 2:trouble). CONTINUING."
+              fi
+              cat "$patch_output_file" || echo "[SUSFS Diag] No patch output for main patch." # 即使cat失败也继续
+              rm -f "$patch_output_file"
+              echo "--- [SUSFS Diag] Main Patch Output End ---"
             else
-              patch_exit_code_66=$?
-              echo "::warning::[SUSFS Diag] 6.6 fix patch command exited with code $patch_exit_code_66. CONTINUING."
+              echo "::warning::[SUSFS Diag] Main SUSFS patch file ./${SUSFS_PATCH_FILENAME_IN_COMMON} not found in $(pwd). This might be intended."
             fi
-            cat "$patch_output_file_66" || echo "[SUSFS Diag] No patch output for 6.6 fix."
-            rm -f "$patch_output_file_66"
-            echo "--- [SUSFS Diag] 6.6 Fix Patch Output End ---"
+            
+            FORMATTED_BRANCH_FOR_FIX_COMPARE="${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
+            if [[ "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-08" || "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-09" ]]; then
+              echo "[SUSFS Diag] Applying fix for 6.6 kernel (in $(pwd))..."
+              curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/fix/fix6.6.patch -o fix6.6.patch
+              patch_output_file_66=$(mktemp)
+              echo "--- [SUSFS Diag] 6.6 Fix Patch Output (Command: patch -p1 < fix6.6.patch) ---"
+              if patch -p1 < fix6.6.patch > "$patch_output_file_66" 2>&1; then
+                echo "[SUSFS Diag] 6.6 fix patch applied (exit code 0)."
+              else
+                patch_exit_code_66=$?
+                echo "::warning::[SUSFS Diag] 6.6 fix patch command exited with code $patch_exit_code_66. CONTINUING."
+              fi
+              cat "$patch_output_file_66" || echo "[SUSFS Diag] No patch output for 6.6 fix." # 即使cat失败也继续
+              rm -f "$patch_output_file_66"
+              echo "--- [SUSFS Diag] 6.6 Fix Patch Output End ---"
+            fi
+            # 应用完补丁后，返回到 working-directory 指定的目录 (KERNEL_SRC_ROOT)
+            cd "$current_dir_before_cd_common" || echo "::warning::[SUSFS Diag] Failed to cd back to $current_dir_before_cd_common from $(pwd)"
           fi
-          # 此脚本块的 working-directory 是 KERNEL_SRC_ROOT, cd ./common 后，脚本块结束时会自动回到 KERNEL_SRC_ROOT
-          cd .. # 从 common 返回 KERNEL_SRC_ROOT (如果上面的cd成功)
           echo "[SUSFS Diag] SUSFS patching (old logic) finished. PLEASE REVIEW LOGS CAREFULLY."
 
       - name: 并行应用内核补丁 (不含SUSFS)
