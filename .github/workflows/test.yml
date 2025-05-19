@@ -98,27 +98,36 @@ jobs:
       sukisu_version: ${{ steps.calculate_version.outputs.suki_version_actual }}
     steps:
       - name: 安装Git
-        run: sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends git
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends git
       - name: 计算SukiSU版本号
         id: calculate_version
         shell: bash
         run: |
           set -euo pipefail
-          suki_version_actual_for_output="获取失败"; job_suffix_text=""
-          SUKI_REPO_URL="https://github.com/ShirkNeko/SukiSU-Ultra.git"; CLONE_BRANCH="main"
+          suki_version_actual_for_output="获取失败"
+          job_suffix_text=""
+          SUKI_REPO_URL="https://github.com/ShirkNeko/SukiSU-Ultra.git"
+          CLONE_BRANCH="main"
+          echo "Attempting to clone SukiSU from $SUKI_REPO_URL branch $CLONE_BRANCH..."
           if git clone --branch "$CLONE_BRANCH" --single-branch "$SUKI_REPO_URL" SukiSU_temp_for_version; then
             cd SukiSU_temp_for_version
             commit_count=$(git rev-list --count HEAD 2>/dev/null || echo "err_count")
             if [[ "$commit_count" != "err_count" && "$commit_count" =~ ^[0-9]+$ ]]; then
               calculated_version=$((commit_count + 10606))
-              suki_version_actual_for_output=$calculated_version; job_suffix_text=" (SukiSU $calculated_version)"
+              suki_version_actual_for_output=$calculated_version
+              job_suffix_text=" (SukiSU $calculated_version)"
+              echo "SukiSU version calculated: $calculated_version"
             else
-              suki_version_actual_for_output="计算错误"; job_suffix_text=" (SukiSU - 版本计算失败)"
+              suki_version_actual_for_output="计算错误"
+              job_suffix_text=" (SukiSU - 版本计算失败)"
               echo "::warning::Failed to calculate SukiSU commit count. Git count output: $commit_count"
             fi
             cd .. && rm -rf SukiSU_temp_for_version
           else
-            suki_version_actual_for_output="克隆错误"; job_suffix_text=" (SukiSU - 克隆失败)"
+            suki_version_actual_for_output="克隆错误"
+            job_suffix_text=" (SukiSU - 克隆失败)"
             echo "::error::Failed to clone SukiSU repository."
           fi
           echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
@@ -152,17 +161,28 @@ jobs:
     steps:
       - name: 验证输入参数 (基本)
         run: |
-          set -euo pipefail; kernel_input="${{ github.event.inputs.kernel_to_build }}"
-          if [[ -z "$kernel_input" ]]; then echo "::error::'kernel_to_build' input is empty."; exit 1; fi
+          set -euo pipefail
+          kernel_input="${{ github.event.inputs.kernel_to_build }}"
+          if [[ -z "$kernel_input" ]]; then
+            echo "::error::'kernel_to_build' input is empty."
+            exit 1
+          fi
+          echo "Input 'kernel_to_build': $kernel_input - basic validation passed."
 
       - name: 解析内核参数
         id: parse_kernel
         run: |
-          set -euo pipefail; IFS='_' read -r av kv sl opl rev_raw <<< "${{ github.event.inputs.kernel_to_build }}"
-          echo "SELECTED_ANDROID_VERSION=$av" >> $GITHUB_ENV; echo "SELECTED_KERNEL_VERSION=$kv" >> $GITHUB_ENV
-          echo "SELECTED_SUB_LEVEL=$sl" >> $GITHUB_ENV; echo "SELECTED_OS_PATCH_LEVEL=$opl" >> $GITHUB_ENV
-          rev="${rev_raw:-}"; echo "SELECTED_REVISION=$rev" >> $GITHUB_ENV
-          echo "parsed_kernel_version=$kv" >> $GITHUB_OUTPUT; echo "parsed_sub_level=$sl" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          IFS='_' read -r av kv sl opl rev_raw <<< "${{ github.event.inputs.kernel_to_build }}"
+          echo "SELECTED_ANDROID_VERSION=$av" >> $GITHUB_ENV
+          echo "SELECTED_KERNEL_VERSION=$kv" >> $GITHUB_ENV
+          echo "SELECTED_SUB_LEVEL=$sl" >> $GITHUB_ENV
+          echo "SELECTED_OS_PATCH_LEVEL=$opl" >> $GITHUB_ENV
+          rev="${rev_raw:-}"
+          echo "SELECTED_REVISION=$rev" >> $GITHUB_ENV
+          echo "parsed_kernel_version=$kv" >> $GITHUB_OUTPUT
+          echo "parsed_sub_level=$sl" >> $GITHUB_OUTPUT
+          echo "Parsed kernel parameters: AV=$av, KV=$kv, SL=$sl, OPL=$opl, REV=$rev"
 
       - name: 设置核心路径和配置名称
         id: set_core_paths
@@ -175,6 +195,7 @@ jobs:
           GKI_DEFCONFIG_FILE_PATH_VALUE="${KERNEL_SOURCE_DIRECTORY_VALUE}/common/arch/arm64/configs/gki_defconfig"
           echo "GKI_DEFCONFIG_PATH_ENV=${GKI_DEFCONFIG_FILE_PATH_VALUE}" >> $GITHUB_ENV
           echo "gki_defconfig_path_output=${GKI_DEFCONFIG_FILE_PATH_VALUE}" >> $GITHUB_OUTPUT
+          echo "Set KERNEL_SRC_ROOT env var to: ${KERNEL_SOURCE_DIRECTORY_VALUE}"
 
       - name: 生成版本后缀和日期
         id: generate_suffixes
@@ -183,10 +204,16 @@ jobs:
           SELECTED_AV_ENV: ${{ env.SELECTED_ANDROID_VERSION }}
           SELECTED_KV_ENV: ${{ env.SELECTED_KERNEL_VERSION }}
         run: |
-          set -euo pipefail; final_kernel_local_version=""; artifact_name_suffix_part=""
-          current_date_yyyymmdd=$(date +%Y%m%d); current_date_formatted=$(date +"%Y年%m月%d日")
+          set -euo pipefail
+          final_kernel_local_version=""
+          artifact_name_suffix_part=""
+          current_date_yyyymmdd=$(date +%Y%m%d)
+          current_date_formatted=$(date +"%Y年%m月%d日")
+
           if [[ -n "$USER_PROVIDED_SUFFIX" ]]; then
-            final_kernel_local_version="$USER_PROVIDED_SUFFIX"; artifact_name_suffix_part="$USER_PROVIDED_SUFFIX"
+            final_kernel_local_version="$USER_PROVIDED_SUFFIX"
+            artifact_name_suffix_part="$USER_PROVIDED_SUFFIX"
+            echo "Using user-provided suffix: $final_kernel_local_version"
           else
             kernel_fixed_part_for_localversion=""
             if [ "$SELECTED_AV_ENV" == "android12" ] && [ "$SELECTED_KV_ENV" == "5.10" ]; then kernel_fixed_part_for_localversion="-android12-9"
@@ -195,10 +222,12 @@ jobs:
             elif [ "$SELECTED_AV_ENV" == "android14" ] && [ "$SELECTED_KV_ENV" == "6.1" ]; then kernel_fixed_part_for_localversion="-android14-11"
             elif [ "$SELECTED_AV_ENV" == "android15" ] && [ "$SELECTED_KV_ENV" == "6.6" ]; then kernel_fixed_part_for_localversion="-android15-8"
             else kernel_fixed_part_for_localversion="-${SELECTED_AV_ENV}-${SELECTED_KV_ENV//./_}-custom"; fi
+            
             random_hex_11=$(head /dev/urandom | LC_ALL=C tr -dc 'a-f0-9' | head -c 11 || echo "randhex")
             random_digits_8=$(head /dev/urandom | LC_ALL=C tr -dc '0-9' | head -c 8 || echo "randdig")
             final_kernel_local_version="${kernel_fixed_part_for_localversion}-gd${random_hex_11}-ab${random_digits_8}"
             artifact_name_suffix_part="-${current_date_yyyymmdd}"
+            echo "Generated pseudo-official suffix: $final_kernel_local_version"
           fi
           echo "FINAL_KERNEL_LOCAL_VERSION=${final_kernel_local_version}" >> "$GITHUB_ENV"
           echo "ARTIFACT_NAME_SUFFIX_PART=${artifact_name_suffix_part}" >> "$GITHUB_ENV"
@@ -208,27 +237,48 @@ jobs:
       - name: 调整KPM设置
         id: kpm_settings
         run: |
-          set -euo pipefail; EFFECTIVE_KPM_VALUE=""
-          if [[ "${{ env.SELECTED_ANDROID_VERSION }}" == "android15" && "${{ env.SELECTED_KERNEL_VERSION }}" == "6.6" ]]; then EFFECTIVE_KPM_VALUE="false"
-          else EFFECTIVE_KPM_VALUE="${{ github.event.inputs.use_kpm }}"; fi
+          set -euo pipefail
+          EFFECTIVE_KPM_VALUE=""
+          if [[ "${{ env.SELECTED_ANDROID_VERSION }}" == "android15" && "${{ env.SELECTED_KERNEL_VERSION }}" == "6.6" ]]; then
+            EFFECTIVE_KPM_VALUE="false"
+            echo "KPM is forced to 'false' for Android 15 with Kernel 6.6."
+          else
+            EFFECTIVE_KPM_VALUE="${{ github.event.inputs.use_kpm }}"
+            echo "KPM setting based on user input: $EFFECTIVE_KPM_VALUE"
+          fi
           echo "EFFECTIVE_USE_KPM=${EFFECTIVE_KPM_VALUE}" >> $GITHUB_ENV
           echo "effective_kpm_value=${EFFECTIVE_KPM_VALUE}" >> $GITHUB_OUTPUT
 
       - name: 优化构建空间
         uses: easimon/maximize-build-space@master
-        with: { root-reserve-mb: 8192, temp-reserve-mb: 2048, swap-size-mb: 8192, remove-dotnet: "true", remove-android: "true", remove-haskell: "true", remove-codeql: "true" }
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          swap-size-mb: 8192
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
 
       - name: 安装ccache及依赖
-        run: sudo apt-get update -qq && sudo apt-get install -yq --no-install-recommends ccache python3 git curl time libssl-dev flex
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -yq --no-install-recommends ccache python3 git curl time libssl-dev flex
 
       - name: 配置ccache
         run: |
-          set -euo pipefail; mkdir -p ~/.cache/bazel; ccache --version; ccache --max-size=2G
+          set -euo pipefail
+          mkdir -p ~/.cache/bazel
+          ccache --version
+          ccache --max-size=2G
           ccache --set-config=compression=true
-          if ccache --version | grep -q 'Zstd'; then ccache --set-config=compression_type=zstd; fi
-          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV; ccache -s
+          if ccache --version | grep -q 'Zstd'; then
+            ccache --set-config=compression_type=zstd
+            echo "ccache: Zstd compression enabled."
+          fi
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+          ccache -s
 
-      # ***** YAML 语法修正开始 *****
       - name: 还原ccache缓存
         uses: actions/cache@v4
         with:
@@ -237,7 +287,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ccache-v2-${{ github.event.inputs.kernel_to_build }}-
             ${{ runner.os }}-ccache-v2-
-      # ***** YAML 语法修正结束 *****
 
       - name: 缓存预编译工具链
         id: cache-toolchain
@@ -251,8 +300,11 @@ jobs:
       - name: 下载预编译工具链 (若缓存未命中)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
-          set -euo pipefail; AOSP_MIRROR=https://android.googlesource.com
-          BUILD_TOOLS_BRANCH=main-kernel-build-2024; MKBOOTIMG_BRANCH=main
+          set -euo pipefail
+          AOSP_MIRROR=https://android.googlesource.com
+          BUILD_TOOLS_BRANCH=main-kernel-build-2024
+          MKBOOTIMG_BRANCH=main
+          echo "Downloading prebuilt toolchain..."
           git clone "$AOSP_MIRROR/kernel/prebuilts/build-tools" -b "$BUILD_TOOLS_BRANCH" --depth 1 kernel-build-tools
           git clone "$AOSP_MIRROR/platform/system/tools/mkbootimg" -b "$MKBOOTIMG_BRANCH" --depth 1 mkbootimg
 
@@ -264,9 +316,12 @@ jobs:
           echo "UNPACK_BOOTIMG=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py" >> $GITHUB_ENV
 
       - name: 设置签名密钥
-        env: { BOOT_SIGN_KEY: "${{ secrets.BOOT_SIGN_KEY }}" }
+        env:
+          BOOT_SIGN_KEY: ${{ secrets.BOOT_SIGN_KEY }}
         run: |
-          set -euo pipefail; KEY_DIR="$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb"; mkdir -p "$KEY_DIR"
+          set -euo pipefail
+          KEY_DIR="$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb"
+          mkdir -p "$KEY_DIR"
           if [ -z "$BOOT_SIGN_KEY" ]; then
             openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > "$KEY_DIR/testkey_rsa2048.pem"
             echo "BOOT_SIGN_KEY_PATH=$KEY_DIR/testkey_rsa2048.pem" >> $GITHUB_ENV
@@ -277,9 +332,11 @@ jobs:
 
       - name: 安装repo工具
         run: |
-          set -euo pipefail; mkdir -p ./git-repo
+          set -euo pipefail
+          mkdir -p ./git-repo
           curl -sS https://storage.googleapis.com/git-repo-downloads/repo > ./git-repo/repo
-          chmod a+rx ./git-repo/repo; echo "REPO=$GITHUB_WORKSPACE/./git-repo/repo" >> $GITHUB_ENV
+          chmod a+rx ./git-repo/repo
+          echo "REPO=$GITHUB_WORKSPACE/./git-repo/repo" >> $GITHUB_ENV
 
       - name: 检查依赖项安全 (可选)
         uses: actions/dependency-review-action@v4
@@ -292,10 +349,14 @@ jobs:
 
       - name: 克隆依赖仓库 (AnyKernel3等)
         run: |
-          set -euo pipefail; ANYKERNEL_BRANCH="gki-2.0"
-          SUSFS_BRANCH_SPECIFIC="gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"; SUSFS_BRANCH_FALLBACK="main"
+          set -euo pipefail
+          ANYKERNEL_BRANCH="gki-2.0"
+          SUSFS_BRANCH_SPECIFIC="gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
+          SUSFS_BRANCH_FALLBACK="main"
+          echo "Cloning dependency repositories..."
           git clone https://github.com/WildPlusKernel/AnyKernel3.git -b "$ANYKERNEL_BRANCH" AnyKernel3
           if ! git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH_SPECIFIC" susfs4ksu; then
+            echo "Failed to clone susfs4ksu with branch $SUSFS_BRANCH_SPECIFIC, trying fallback: $SUSFS_BRANCH_FALLBACK"
             git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH_FALLBACK" susfs4ksu
           fi
           git clone https://github.com/WildPlusKernel/kernel_patches.git kernel_patches
@@ -303,39 +364,71 @@ jobs:
 
       - name: 同步内核源码 (带重试)
         uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 20; max_attempts: 3
+        with: # ***** YAML 语法修正开始 *****
+          timeout_minutes: 20
+          max_attempts: 3
+          # ***** YAML 语法修正结束 *****
           command: |
-            set -euo pipefail; mkdir -p "${{ env.KERNEL_SRC_ROOT }}"; cd "${{ env.KERNEL_SRC_ROOT }}"
-            _MANIFEST_BRANCH_BASE="common-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"; _MANIFEST_BRANCH=""
-            if [[ -n "${{ env.SELECTED_OS_PATCH_LEVEL }}" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "X" ]]; then _MANIFEST_BRANCH="${_MANIFEST_BRANCH_BASE}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
-            elif [[ "${{ github.event.inputs.kernel_to_build }}" == *"_X_lts_"* || "${{ github.event.inputs.kernel_to_build }}" == *"_lts_"* ]]; then _MANIFEST_BRANCH="${_MANIFEST_BRANCH_BASE}-lts"
-            else _MANIFEST_BRANCH="${_MANIFEST_BRANCH_BASE}"; fi
+            set -euo pipefail
+            mkdir -p "${{ env.KERNEL_SRC_ROOT }}"
+            cd "${{ env.KERNEL_SRC_ROOT }}"
+            _MANIFEST_BRANCH_BASE="common-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
+            _MANIFEST_BRANCH=""
+            if [[ -n "${{ env.SELECTED_OS_PATCH_LEVEL }}" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "X" ]]; then
+              _MANIFEST_BRANCH="${_MANIFEST_BRANCH_BASE}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
+            elif [[ "${{ github.event.inputs.kernel_to_build }}" == *"_X_lts_"* || "${{ github.event.inputs.kernel_to_build }}" == *"_lts_"* ]]; then
+              _MANIFEST_BRANCH="${_MANIFEST_BRANCH_BASE}-lts"
+            else
+              _MANIFEST_BRANCH="${_MANIFEST_BRANCH_BASE}"
+            fi
+            echo "Using manifest branch: $_MANIFEST_BRANCH"
             ${{ env.REPO }} init --depth=1 -u https://android.googlesource.com/kernel/manifest -b $_MANIFEST_BRANCH --repo-rev=v2.16
-            DEFAULT_MANIFEST_PATH=".repo/manifests/default.xml"; if [ ! -f "$DEFAULT_MANIFEST_PATH" ] && [ -f .repo/manifest.xml ]; then DEFAULT_MANIFEST_PATH=.repo/manifest.xml; fi
+            DEFAULT_MANIFEST_PATH=".repo/manifests/default.xml"
+            if [ ! -f "$DEFAULT_MANIFEST_PATH" ] && [ -f .repo/manifest.xml ]; then
+              DEFAULT_MANIFEST_PATH=.repo/manifest.xml
+            fi
             COMMON_PROJECT_REVISION_IN_MANIFEST=$(grep 'project path="common"' "$DEFAULT_MANIFEST_PATH" | sed -n 's/.*revision="\([^"]*\)".*/\1/p' | head -n 1)
-            if [ -z "$COMMON_PROJECT_REVISION_IN_MANIFEST" ]; then COMMON_PROJECT_REVISION_IN_MANIFEST=$(grep 'project path="kernel/common"' "$DEFAULT_MANIFEST_PATH" | sed -n 's/.*revision="\([^"]*\)".*/\1/p' | head -n 1); if [ -z "$COMMON_PROJECT_REVISION_IN_MANIFEST" ]; then COMMON_PROJECT_REVISION_IN_MANIFEST=$_MANIFEST_BRANCH; fi; fi
+            if [ -z "$COMMON_PROJECT_REVISION_IN_MANIFEST" ]; then
+                COMMON_PROJECT_REVISION_IN_MANIFEST=$(grep 'project path="kernel/common"' "$DEFAULT_MANIFEST_PATH" | sed -n 's/.*revision="\([^"]*\)".*/\1/p' | head -n 1)
+                if [ -z "$COMMON_PROJECT_REVISION_IN_MANIFEST" ]; then
+                  COMMON_PROJECT_REVISION_IN_MANIFEST=$_MANIFEST_BRANCH
+                fi
+            fi
             REMOTE_COMMON_BRANCH_STATUS=$(git ls-remote https://android.googlesource.com/kernel/common "$COMMON_PROJECT_REVISION_IN_MANIFEST")
-            if echo "$REMOTE_COMMON_BRANCH_STATUS" | grep -q "refs/heads/deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST"; then sed -i "/project path=\"common\"/s|revision=\"$COMMON_PROJECT_REVISION_IN_MANIFEST\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST\"|" "$DEFAULT_MANIFEST_PATH" || sed -i "/project path=\"kernel\/common\"/s|revision=\"$COMMON_PROJECT_REVISION_IN_MANIFEST\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST\"|" "$DEFAULT_MANIFEST_PATH";fi
+            if echo "$REMOTE_COMMON_BRANCH_STATUS" | grep -q "refs/heads/deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST"; then
+              echo "Adjusting manifest for deprecated common branch: $COMMON_PROJECT_REVISION_IN_MANIFEST"
+              sed -i "/project path=\"common\"/s|revision=\"$COMMON_PROJECT_REVISION_IN_MANIFEST\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST\"|" "$DEFAULT_MANIFEST_PATH" || \
+              sed -i "/project path=\"kernel\/common\"/s|revision=\"$COMMON_PROJECT_REVISION_IN_MANIFEST\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST\"|" "$DEFAULT_MANIFEST_PATH"
+            fi
             ${{ env.REPO }} --trace sync -c -j$(nproc --all) --no-tags --fail-fast --current-branch
 
       - name: 设置SukiSU分支参数
         run: |
-          set -euo pipefail; KSU_SETUP_BRANCH_ARG=""
-          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then KSU_SETUP_BRANCH_ARG="-s susfs-dev"; fi
+          set -euo pipefail
+          KSU_SETUP_BRANCH_ARG=""
+          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
+            KSU_SETUP_BRANCH_ARG="-s susfs-dev"
+          fi
           echo "KSU_BRANCH_ARG=${KSU_SETUP_BRANCH_ARG}" >> $GITHUB_ENV
 
       - name: 集成SukiSU
         run: |
-          set -euo pipefail; cd "${{ env.KERNEL_SRC_ROOT }}"
+          set -euo pipefail
+          cd "${{ env.KERNEL_SRC_ROOT }}"
+          echo "Integrating SukiSU with args: ${{ env.KSU_BRANCH_ARG }}"
           curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- ${{ env.KSU_BRANCH_ARG }}
 
       - name: 设置SukiSU版本号
         shell: bash
         run: |
-          set -euo pipefail; final_suki_version_num_for_env="${{ needs.determine_sukisu_version.outputs.sukisu_version }}"
-          if [[ "$final_suki_version_num_for_env" =~ ^[0-9]+$ ]]; then echo "SUKI_VERSION_NUM=$final_suki_version_num_for_env" >> $GITHUB_ENV
-          else echo "SUKI_VERSION_NUM=NoVer" >> $GITHUB_ENV; echo "::warning::Invalid SukiSU version ('$final_suki_version_num_for_env')."; fi
+          set -euo pipefail
+          final_suki_version_num_for_env="${{ needs.determine_sukisu_version.outputs.sukisu_version }}"
+          if [[ "$final_suki_version_num_for_env" =~ ^[0-9]+$ ]]; then
+            echo "SUKI_VERSION_NUM=$final_suki_version_num_for_env" >> $GITHUB_ENV
+          else
+            echo "SUKI_VERSION_NUM=NoVer" >> $GITHUB_ENV
+            echo "::warning::Invalid SukiSU version ('$final_suki_version_num_for_env'). Using 'NoVer'."
+          fi
 
       # ***** 关键诊断步骤：移除此脚本块的 set -e, 并详细记录 cp 和 patch 操作 *****
       - name: 应用SUSFS补丁 (旧版逻辑)
@@ -409,6 +502,7 @@ jobs:
             FORMATTED_BRANCH_FOR_FIX_COMPARE="${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
             if [[ "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-08" || "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-09" ]]; then
               echo "[SUSFS Diag] Applying fix for 6.6 kernel (in $(pwd))..."
+              # 确保 fix6.6.patch 下载到当前目录 (common)
               curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/fix/fix6.6.patch -o fix6.6.patch
               patch_output_file_66=$(mktemp)
               echo "--- [SUSFS Diag] 6.6 Fix Patch Output (Command: patch -p1 < fix6.6.patch) ---"
@@ -480,7 +574,9 @@ jobs:
         uses: nick-fields/retry@v3
         env: { BAZEL_PROFILE_PATH_IN_WORKSPACE: "${{ github.workspace }}/${{ env.BAZEL_PROFILE_FILENAME }}" }
         with:
-          timeout_minutes: 75; max_attempts: 2; retry_on: timeout
+          timeout_minutes: 75
+          max_attempts: 2
+          retry_on: timeout
           command: |
             set -euo pipefail; set -x
             execute_build_process() {
