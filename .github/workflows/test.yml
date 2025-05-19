@@ -137,12 +137,12 @@ jobs:
     needs: version_probe
     runs-on: ubuntu-latest
     outputs:
-      artifact_name: ${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}
+      artifact_name_for_release: ${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}
       release_tag: ${{ steps.prepare_release_outputs.outputs.release_tag_name }}
       release_title: ${{ steps.prepare_release_outputs.outputs.release_title_name }}
       final_kernel_local_version_output: ${{ steps.generate_version_elements.outputs.final_kernel_local_version_for_body }}
       current_build_date_formatted_output: ${{ steps.generate_version_elements.outputs.current_build_date_formatted_for_body }}
-      artifact_naming_suffix_output: ${{ steps.generate_version_elements.outputs.artifact_naming_suffix_for_prepare }}
+      # artifact_naming_suffix_output: ${{ steps.generate_version_elements.outputs.artifact_naming_suffix_for_prepare }} # 此输出不再直接传递给 release job
       parsed_kernel_version_output: ${{ steps.parse_kernel.outputs.parsed_kernel_version }}
       parsed_sub_level_output: ${{ steps.parse_kernel.outputs.parsed_sub_level }}
       sukisu_version_from_build_job: ${{ needs.version_probe.outputs.sukisu_version }}
@@ -156,6 +156,7 @@ jobs:
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json 
       DEBIAN_FRONTEND: noninteractive
+      INTERMEDIATE_ARTIFACT_NAME: "TEMP_KERNEL_PACKAGE_CONTENT" # 作业间传递的固定 Artifact 名称
 
     steps:
       - name: 参数校验
@@ -373,7 +374,7 @@ jobs:
             
             _MANIFEST_BRANCH_FOR_INIT="common-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
             if [[ -n "${{ env.SELECTED_OS_PATCH_LEVEL }}" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "_" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "X" ]]; then
-                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}-${{ env.SELECTED_OS_PATCH_LEVEL }}" # 修正这里的拼接
+                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}-${{ env.SELECTED_OS_PATCH_LEVEL }}" # *** 修正花括号问题 ***
             elif [[ "${{ github.event.inputs.kernel_to_build }}" == *"_X_lts_"* || "${{ github.event.inputs.kernel_to_build }}" == *"_lts_"* ]]; then
                 _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-lts"
             fi
@@ -552,7 +553,7 @@ jobs:
           if [ ! -f "$CONFIG_FILE_PATH" ]; then echo "::error::gki_defconfig not found for ZRAM config"; exit 1; fi
           update_cfg() {
             local k="$1"; local v="$2"; local file="$3"
-            sed -i "/^${k}=/d" "$file"; sed -i "/^# ${k} is not set/d" "$file"; echo "${k}=${v}" >> "$file" # 修正：使用 $v 而不是 $value
+            sed -i "/^${k}=/d" "$file"; sed -i "/^# ${k} is not set/d" "$file"; echo "${k}=${v}" >> "$file" # 修正：使用 $v
           }
           update_cfg "CONFIG_ZSMALLOC" "y" "$CONFIG_FILE_PATH"
           update_cfg "CONFIG_ZRAM" "y" "$CONFIG_FILE_PATH"
@@ -573,7 +574,7 @@ jobs:
         run: |
           set -euo pipefail
           GKI_PATH="${{ env.GKI_DEFCONFIG_PATH_ENV }}"; if [ ! -f "$GKI_PATH" ]; then echo "::error::gki_defconfig not found for SUSFS config"; exit 1; fi
-          upd_cfg() { local k="$1"; local v="$2"; local file="$3"; sed -i -e "/^${k}=/d" -e "/^# ${k} is not set/d" "$file"; echo "${k}=${v}" >> "$file"; } # 修正：使用 $v 而不是 $value
+          upd_cfg() { local k="$1"; local v="$2"; local file="$3"; sed -i -e "/^${k}=/d" -e "/^# ${k} is not set/d" "$file"; echo "${k}=${v}" >> "$file"; } # 修正：使用 $v
           cfgs_y=( "CONFIG_KSU" "CONFIG_KSU_MANUAL_HOOK" "CONFIG_TMPFS_XATTR" "CONFIG_TMPFS_POSIX_ACL" "CONFIG_IP_NF_TARGET_TTL" "CONFIG_IP6_NF_TARGET_HL" "CONFIG_IP6_NF_MATCH_HL" "CONFIG_TCP_CONG_ADVANCED" "CONFIG_TCP_CONG_BBR" "CONFIG_NET_SCH_FQ" "CONFIG_KSU_SUSFS" "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT" "CONFIG_KSU_SUSFS_SUS_PATH" "CONFIG_KSU_SUSFS_SUS_MOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT" "CONFIG_KSU_SUSFS_SUS_KSTAT" "CONFIG_KSU_SUSFS_TRY_UMOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT" "CONFIG_KSU_SUSFS_SPOOF_UNAME" "CONFIG_KSU_SUSFS_ENABLE_LOG" "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS" "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG" "CONFIG_KSU_SUSFS_OPEN_REDIRECT" )
           cfgs_n=( "CONFIG_KSU_SUSFS_SUS_SU" "CONFIG_KSU_SUSFS_SUS_OVERLAYFS" "CONFIG_TCP_CONG_BIC" "CONFIG_TCP_CONG_WESTWOOD" "CONFIG_TCP_CONG_HTCP" )
           for ck in "${cfgs_y[@]}"; do upd_cfg "$ck" "y" "$GKI_PATH"; done
@@ -763,10 +764,7 @@ jobs:
       - name: 构建产物上传
         uses: actions/upload-artifact@v4
         with:
-          name: |
-            ${{ (env.SUKI_VERSION_NUM != 'NoVer' && env.SUKI_VERSION_NUM != '' && env.SUKI_VERSION_NUM != '00000' && github.event.inputs.custom_version_suffix == '') &&
-                format('AnyKernel3_SukiSUUltra_{0}_{1}-{2}{3}', env.SUKI_VERSION_NUM, env.SELECTED_KERNEL_VERSION, env.SELECTED_SUB_LEVEL, env.ARTIFACT_NAME_SUFFIX_PART_ENV) ||
-                format('AnyKernel3_SukiSU_{0}_{1}-{2}{3}', github.event.inputs.custom_version_suffix == '' && 'NoVer_GKI' || format('NoVer_Custom-{0}', github.event.inputs.custom_version_suffix), env.SELECTED_KERNEL_VERSION, env.SELECTED_SUB_LEVEL, github.event.inputs.custom_version_suffix == '' && env.ARTIFACT_NAME_SUFFIX_PART_ENV || '') }}
+          name: ${{ env.INTERMEDIATE_ARTIFACT_NAME }} # 使用固定的内部 Artifact 名称
           path: ${{ github.workspace }}/AnyKernel3
           if-no-files-found: error
 
@@ -795,41 +793,39 @@ jobs:
           _svn="${{ env.SUKI_VERSION_NUM }}"; 
           _kv="${{ env.SELECTED_KERNEL_VERSION }}"; 
           _sl="${{ env.SELECTED_SUB_LEVEL }}"; 
-          _suf_for_artifact_name="${{ needs.kernel_build_core.outputs.artifact_naming_suffix_output }}" 
+          _suf_for_release_name="${{ env.ARTIFACT_NAME_SUFFIX_PART_ENV }}" # 来自 generate_version_elements
           _base="SukiSUUltra"; _tit=""; _tag=""
+          _final_local_version_for_release="${{ env.FINAL_KERNEL_LOCAL_VERSION }}" # 来自 generate_version_elements
 
+          # 根据是否有自定义后缀和SukiSU版本号来决定最终的Release名称和Tag
           if [[ "$_svn" != "NoVer" && "$_svn" =~ ^[0-9]+$ && -z "${{ github.event.inputs.custom_version_suffix }}" ]]; then
-            _aname="AnyKernel3_${_base}_${_svn}_${_kv}-${_sl}${_suf_for_artifact_name}"
+            # 有效SukiSU版本号，且无自定义后缀：使用SukiSU版本号和日期后缀
+            _aname_for_release="AnyKernel3_${_base}_${_svn}_${_kv}-${_sl}${_suf_for_release_name}"
             _tit="${_base}-${_svn}"
-            _tag="${_base}-${_svn}_${_kv}-${_sl}${_suf_for_artifact_name}"
-          else 
-            _effective_suffix_for_title_tag="${{ github.event.inputs.custom_version_suffix }}"
-            if [[ -z "$_effective_suffix_for_title_tag" ]]; then 
-                _effective_suffix_for_title_tag="${_suf_for_artifact_name}" 
+            _tag="${_base}-${_svn}_${_kv}-${_sl}${_suf_for_release_name}"
+          else
+            # 有自定义后缀 或 SukiSU版本号无效：
+            _effective_suffix_for_naming="${{ github.event.inputs.custom_version_suffix }}"
+            if [[ -z "$_effective_suffix_for_naming" ]]; then # 如果自定义后缀也为空 (且SukiSU版本无效)，则使用日期
+                _effective_suffix_for_naming="${_suf_for_release_name}"
             fi
-            # 如果有自定义后缀，则版本号部分标记为 Custom，否则标记为 NoVer (如果 Suki 版本号无效)
-            _version_indicator="NoVer"
+            
+            _version_indicator_for_naming="NoVer" # 默认
             if [[ -n "${{ github.event.inputs.custom_version_suffix }}" ]]; then
-                _version_indicator="Custom"
-            elif [[ "$_svn" != "NoVer" && "$_svn" =~ ^[0-9]+$ ]]; then # 如果没有自定义后缀，但 Suki 版本号有效
-                 _version_indicator="${_svn}" # 仍然使用 SukiSU 版本号
-                 _base="SukiSUUltra"
-                 _tit="${_base}-${_svn}" # 标题也用 SukiSU 版本号
+                _version_indicator_for_naming="Custom" # 如果有自定义后缀，标记为Custom
+                _tit="${_base}-Custom${_effective_suffix_for_naming}"
+            elif [[ "$_svn" != "NoVer" && "$_svn" =~ ^[0-9]+$ ]]; then # 无自定义后缀，但SukiSU版本有效
+                 _version_indicator_for_naming="${_svn}"
+                 _tit="${_base}-${_svn}" # 标题使用SukiSU版本
+            else # SukiSU版本无效且无自定义后缀
+                 _tit="${_base}-NoVer${_effective_suffix_for_naming}"
             fi
 
-
-            if [[ "$_version_indicator" != "NoVer" && "$_version_indicator" != "Custom" ]]; then # 使用SukiSU版本号
-                 _aname="AnyKernel3_${_base}_${_version_indicator}_${_kv}-${_sl}${_suf_for_artifact_name}"
-                 _tit="${_base}-${_version_indicator}"
-                 _tag="${_base}-${_version_indicator}_${_kv}-${_sl}${_suf_for_artifact_name}"
-            else # 使用 NoVer 或 Custom
-                _aname="AnyKernel3_${_base}_${_version_indicator}_${_kv}-${_sl}${_effective_suffix_for_title_tag}"
-                _tit="${_base}-${_version_indicator}${_effective_suffix_for_title_tag}"
-                _tag="${_base}-${_version_indicator}_${_kv}-${_sl}${_effective_suffix_for_title_tag}"
-            fi
+            _aname_for_release="AnyKernel3_${_base}_${_version_indicator_for_naming}_${_kv}-${_sl}${_effective_suffix_for_naming}"
+            _tag="${_base}-${_version_indicator_for_naming}_${_kv}-${_sl}${_effective_suffix_for_naming}"
           fi
           
-          echo "artifact_name_for_release=$(echo "$_aname" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
+          echo "artifact_name_for_release=$(echo "$_aname_for_release" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_tag_name=$(echo "$_tag" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_title_name=${_tit}" >> "$GITHUB_OUTPUT"
 
@@ -848,7 +844,7 @@ jobs:
       - name: 下载内核刷机包 (Artifact)
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.kernel_build_core.outputs.artifact_name }}
+          name: ${{ env.INTERMEDIATE_ARTIFACT_NAME }} # 使用固定的内部 Artifact 名称下载
           path: downloaded_artifact/
       - name: 准备刷机包并设置路径
         id: package_kernel
@@ -856,12 +852,14 @@ jobs:
         run: |
           set -euo pipefail
           cd downloaded_artifact
-          final_zip="${{ needs.kernel_build_core.outputs.artifact_name }}.zip"
+          # 使用 needs.kernel_build_core.outputs.artifact_name_for_release 来命名最终的 zip 文件
+          final_zip_name="${{ needs.kernel_build_core.outputs.artifact_name_for_release }}.zip"
+          echo "Final ZIP name will be: $final_zip_name"
           if [ -z "$(ls -A .)" ]; then echo "::error::Downloaded artifact directory is empty."; exit 1; fi
-          zip -r9 "../${final_zip}" . 
+          zip -r9 "../${final_zip_name}" . 
           cd ..
-          if [ ! -f "${final_zip}" ]; then echo "::error::Failed to create zip package."; exit 1; fi
-          echo "packaged_zip=${final_zip}" >> $GITHUB_OUTPUT
+          if [ ! -f "${final_zip_name}" ]; then echo "::error::Failed to create zip package named ${final_zip_name}."; exit 1; fi
+          echo "packaged_zip=${final_zip_name}" >> $GITHUB_OUTPUT
       - name: 创建 Release 并上传刷机包
         uses: ncipollo/release-action@v1
         with:
