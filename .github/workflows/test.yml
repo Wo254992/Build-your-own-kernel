@@ -210,7 +210,7 @@ jobs:
           _current_date_formatted_for_body=$(date +"%Y年%m月%d日")
 
           if [[ -n "$USER_PROVIDED_CUSTOM_SUFFIX" ]]; then
-            _actual_localversion_for_kernel="-$USER_PROVIDED_CUSTOM_SUFFIX"
+            _actual_localversion_for_kernel="-$USER_PROVIDED_CUSTOM_SUFFIX" 
             _artifact_naming_suffix_for_prepare="$USER_PROVIDED_CUSTOM_SUFFIX" 
             echo "版本要素: 用户自定义后缀为 '$_actual_localversion_for_kernel' (用于内核) 和 '$_artifact_naming_suffix_for_prepare' (用于文件名)"
           else
@@ -224,8 +224,8 @@ jobs:
             
             _random_hex_11=$(head /dev/urandom | LC_ALL=C tr -dc 'a-f0-9' | head -c 11 || echo "randhex")
             _random_digits_8=$(head /dev/urandom | LC_ALL=C tr -dc '0-9' | head -c 8 || echo "randdig")
-            _actual_localversion_for_kernel="${_kernel_fixed_part}-gd${_random_hex_11}-ab${_random_digits_8}"
-            _artifact_naming_suffix_for_prepare="-${_current_date_yyyymmdd}"
+            _actual_localversion_for_kernel="${_kernel_fixed_part}-gd${_random_hex_11}-ab${_random_digits_8}" 
+            _artifact_naming_suffix_for_prepare="-${_current_date_yyyymmdd}" 
             echo "版本要素: 无自定义后缀。内核 LOCALVERSION 后缀: '$_actual_localversion_for_kernel', Artifact 命名后缀: '$_artifact_naming_suffix_for_prepare'"
           fi
           
@@ -286,8 +286,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}-ccache-${{ github.sha }}
+          key: ${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}-ccache-${{ github.ref_name }}-${{ github.sha }}
           restore-keys: |
+            ${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}-ccache-${{ github.ref_name }}-
             ${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}-ccache-
 
       - name: 工具链缓存
@@ -372,7 +373,7 @@ jobs:
             
             _MANIFEST_BRANCH_FOR_INIT="common-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
             if [[ -n "${{ env.SELECTED_OS_PATCH_LEVEL }}" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "_" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "X" ]]; then
-                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
+                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}-${{ env.SELECTED_OS_PATCH_LEVEL }}" # 修正这里的拼接
             elif [[ "${{ github.event.inputs.kernel_to_build }}" == *"_X_lts_"* || "${{ github.event.inputs.kernel_to_build }}" == *"_lts_"* ]]; then
                 _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-lts"
             fi
@@ -506,7 +507,7 @@ jobs:
           HOOKS_PATCH_FILE="${GITHUB_WORKSPACE}/SukiSU_patch/hooks/syscall_hooks.patch"
           if [ -f "$HOOKS_PATCH_FILE" ]; then
             cp "$HOOKS_PATCH_FILE" ./syscall_hooks.patch
-            patch -p1 -F 3 < syscall_hooks.patch || echo "::warning::SukiSU hooks patch failed or applied with fuzz. Continuing..."
+            patch -p1 -F 3 < syscall_hooks.patch || echo "::warning::SukiSU hooks patch failed or applied with fuzz. Continuing..." 
           else
             echo "::error::SukiSU hooks patch file not found: $HOOKS_PATCH_FILE"; exit 1; 
           fi
@@ -551,7 +552,7 @@ jobs:
           if [ ! -f "$CONFIG_FILE_PATH" ]; then echo "::error::gki_defconfig not found for ZRAM config"; exit 1; fi
           update_cfg() {
             local k="$1"; local v="$2"; local file="$3"
-            sed -i "/^${k}=/d" "$file"; sed -i "/^# ${k} is not set/d" "$file"; echo "${k}=${value}" >> "$file"
+            sed -i "/^${k}=/d" "$file"; sed -i "/^# ${k} is not set/d" "$file"; echo "${k}=${v}" >> "$file" # 修正：使用 $v 而不是 $value
           }
           update_cfg "CONFIG_ZSMALLOC" "y" "$CONFIG_FILE_PATH"
           update_cfg "CONFIG_ZRAM" "y" "$CONFIG_FILE_PATH"
@@ -572,7 +573,7 @@ jobs:
         run: |
           set -euo pipefail
           GKI_PATH="${{ env.GKI_DEFCONFIG_PATH_ENV }}"; if [ ! -f "$GKI_PATH" ]; then echo "::error::gki_defconfig not found for SUSFS config"; exit 1; fi
-          upd_cfg() { local k="$1"; local v="$2"; local file="$3"; sed -i -e "/^${k}=/d" -e "/^# ${k} is not set/d" "$file"; echo "${k}=${value}" >> "$file"; }
+          upd_cfg() { local k="$1"; local v="$2"; local file="$3"; sed -i -e "/^${k}=/d" -e "/^# ${k} is not set/d" "$file"; echo "${k}=${v}" >> "$file"; } # 修正：使用 $v 而不是 $value
           cfgs_y=( "CONFIG_KSU" "CONFIG_KSU_MANUAL_HOOK" "CONFIG_TMPFS_XATTR" "CONFIG_TMPFS_POSIX_ACL" "CONFIG_IP_NF_TARGET_TTL" "CONFIG_IP6_NF_TARGET_HL" "CONFIG_IP6_NF_MATCH_HL" "CONFIG_TCP_CONG_ADVANCED" "CONFIG_TCP_CONG_BBR" "CONFIG_NET_SCH_FQ" "CONFIG_KSU_SUSFS" "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT" "CONFIG_KSU_SUSFS_SUS_PATH" "CONFIG_KSU_SUSFS_SUS_MOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT" "CONFIG_KSU_SUSFS_SUS_KSTAT" "CONFIG_KSU_SUSFS_TRY_UMOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT" "CONFIG_KSU_SUSFS_SPOOF_UNAME" "CONFIG_KSU_SUSFS_ENABLE_LOG" "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS" "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG" "CONFIG_KSU_SUSFS_OPEN_REDIRECT" )
           cfgs_n=( "CONFIG_KSU_SUSFS_SUS_SU" "CONFIG_KSU_SUSFS_SUS_OVERLAYFS" "CONFIG_TCP_CONG_BIC" "CONFIG_TCP_CONG_WESTWOOD" "CONFIG_TCP_CONG_HTCP" )
           for ck in "${cfgs_y[@]}"; do upd_cfg "$ck" "y" "$GKI_PATH"; done
@@ -599,9 +600,8 @@ jobs:
           fi
 
           if [ -f "$SLS" ]; then
-            # setlocalversion 脚本直接输出 FINAL_KERNEL_LOCAL_VERSION
             echo '#!/bin/sh' > "$SLS"
-            echo 'echo "${{ env.FINAL_KERNEL_LOCAL_VERSION }}"' >> "$SLS"
+            echo 'echo "${{ env.FINAL_KERNEL_LOCAL_VERSION }}"' >> "$SLS" 
             chmod +x "$SLS"
             echo "setlocalversion script updated to output: ${{ env.FINAL_KERNEL_LOCAL_VERSION }}"
           else
@@ -630,30 +630,36 @@ jobs:
           CRIT_FAIL=0
           check_cfg() {
             local k="$1"; local ev="$2"; local c="${3:-false}"
-            if ! grep -q "^${k}=${ev}$" "$GKI_CHECK"; then
-              # 如果是CONFIG_LOCALVERSION，由于我们设置的是 env.FINAL_KERNEL_LOCAL_VERSION，这里检查会失败，所以特殊处理或接受警告
-              if [[ "$k" == "CONFIG_LOCALVERSION" && "$ev" == "\"\"" ]]; then
-                 if grep -q "^CONFIG_LOCALVERSION=\"${{env.FINAL_KERNEL_LOCAL_VERSION}}\"$" "$GKI_CHECK"; then
-                    echo "CONFIG_LOCALVERSION set to '${{env.FINAL_KERNEL_LOCAL_VERSION}}' OK."
-                 else
-                    echo "::warning::CONFIG_LOCALVERSION is not '${{env.FINAL_KERNEL_LOCAL_VERSION}}', actual: $(grep "^CONFIG_LOCALVERSION=" "$GKI_CHECK")"
-                 fi
-              elif [[ "$c" == "true" ]]; then echo "::error::CRITICAL: ${k}!= ${ev}"; CRIT_FAIL=1
-              else echo "::warning::${k}!=${ev}"; fi
-            else echo "${k}=${ev} OK."; fi
+            local current_val=""
+            if grep -q "^${k}=" "$GKI_CHECK"; then
+              current_val=$(grep "^${k}=" "$GKI_CHECK" | cut -d'=' -f2)
+            elif grep -q "^# ${k} is not set$" "$GKI_CHECK"; then
+              current_val="# ${k} is not set"
+            fi
+
+            if [[ "$current_val" == "$ev" ]]; then
+              echo "${k}=${ev} OK."
+            else
+              if [[ "$c" == "true" ]]; then 
+                echo "::error::CRITICAL: ${k} expected '${ev}' but got '${current_val}'"
+                CRIT_FAIL=1
+              else 
+                echo "::warning::${k} expected '${ev}' but got '${current_val}'"
+              fi
+            fi
           }
           check_cfg "CONFIG_KSU" "y" "true"; check_cfg "CONFIG_KSU_SUSFS" "y" "false"; check_cfg "CONFIG_MODVERSIONS" "y" "false"
-          check_cfg "CONFIG_LOCALVERSION" "\"${{env.FINAL_KERNEL_LOCAL_VERSION}}\"" "false" # 检查实际设置的 LOCALVERSION
-          check_cfg "CONFIG_LOCALVERSION_AUTO" "# CONFIG_LOCALVERSION_AUTO is not set" "false" # 检查是否被注释
+          check_cfg "CONFIG_LOCALVERSION" "\"${{env.FINAL_KERNEL_LOCAL_VERSION}}\"" "false" 
+          check_cfg "CONFIG_LOCALVERSION_AUTO" "# CONFIG_LOCALVERSION_AUTO is not set" "false"
           if [[ "${{ github.event.inputs.use_zram }}" == "true" ]]; then
             check_cfg "CONFIG_ZRAM" "y" "true"; check_cfg "CONFIG_CRYPTO_LZ4K" "y" "true"
           fi
-          if [ "$CRIT_FAIL" -ne 0 ]; then cat "$GKI_CHECK"; exit 1; fi
+          if [ "$CRIT_FAIL" -ne 0 ]; then echo "--- Defconfig Contents ---"; cat "$GKI_CHECK"; echo "--- End Defconfig ---"; exit 1; fi
 
       - name: 执行内核编译
         uses: nick-fields/retry@v3
         env:
-          BAZEL_DISK_CACHE_PATH_FOR_BUILD: "/home/runner/.cache/bazel"
+          BAZEL_DISK_CACHE_PATH_FOR_BUILD: "/home/runner/.cache/bazel" 
         with:
           timeout_minutes: 75
           max_attempts: 2
@@ -727,7 +733,7 @@ jobs:
           IMG_SRC=""
           LGC_IMG="${{ env.KERNEL_SRC_ROOT }}/out/${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}/dist/Image"
           BZL_IMG1="${{ env.KERNEL_SRC_ROOT }}/bazel-bin/common/kernel_aarch64/Image"
-          BZL_IMG2="${{ env.KERNEL_SRC_ROOT }}/out/android-gki/dist/Image"
+          BZL_IMG2="${{ env.KERNEL_SRC_ROOT }}/out/android-gki/dist/Image" 
           if [ -f "$LGC_IMG" ]; then IMG_SRC="$LGC_IMG"
           elif [ -f "$BZL_IMG1" ]; then IMG_SRC="$BZL_IMG1"
           elif [ -f "$BZL_IMG2" ]; then IMG_SRC="$BZL_IMG2"
@@ -757,7 +763,7 @@ jobs:
       - name: 构建产物上传
         uses: actions/upload-artifact@v4
         with:
-          name: | # 使用 env.ARTIFACT_NAME_SUFFIX_PART_ENV
+          name: |
             ${{ (env.SUKI_VERSION_NUM != 'NoVer' && env.SUKI_VERSION_NUM != '' && env.SUKI_VERSION_NUM != '00000' && github.event.inputs.custom_version_suffix == '') &&
                 format('AnyKernel3_SukiSUUltra_{0}_{1}-{2}{3}', env.SUKI_VERSION_NUM, env.SELECTED_KERNEL_VERSION, env.SELECTED_SUB_LEVEL, env.ARTIFACT_NAME_SUFFIX_PART_ENV) ||
                 format('AnyKernel3_SukiSU_{0}_{1}-{2}{3}', github.event.inputs.custom_version_suffix == '' && 'NoVer_GKI' || format('NoVer_Custom-{0}', github.event.inputs.custom_version_suffix), env.SELECTED_KERNEL_VERSION, env.SELECTED_SUB_LEVEL, github.event.inputs.custom_version_suffix == '' && env.ARTIFACT_NAME_SUFFIX_PART_ENV || '') }}
@@ -792,26 +798,42 @@ jobs:
           _suf_for_artifact_name="${{ needs.kernel_build_core.outputs.artifact_naming_suffix_output }}" 
           _base="SukiSUUltra"; _tit=""; _tag=""
 
-          # 优先使用 SukiSU 版本号命名，如果提供了自定义后缀，则标题和标签中体现自定义后缀
           if [[ "$_svn" != "NoVer" && "$_svn" =~ ^[0-9]+$ && -z "${{ github.event.inputs.custom_version_suffix }}" ]]; then
             _aname="AnyKernel3_${_base}_${_svn}_${_kv}-${_sl}${_suf_for_artifact_name}"
             _tit="${_base}-${_svn}"
             _tag="${_base}-${_svn}_${_kv}-${_sl}${_suf_for_artifact_name}"
-          else # 无有效 SukiSU 版本号 或 有自定义后缀
+          else 
             _effective_suffix_for_title_tag="${{ github.event.inputs.custom_version_suffix }}"
-            if [[ -z "$_effective_suffix_for_title_tag" ]]; then # 如果自定义后缀也为空，则使用日期后缀
+            if [[ -z "$_effective_suffix_for_title_tag" ]]; then 
                 _effective_suffix_for_title_tag="${_suf_for_artifact_name}" 
             fi
-            _aname="AnyKernel3_${_base}_NoVer_${_kv}-${_sl}${_effective_suffix_for_title_tag}"
-            _tit="${_base}-NoVer${_effective_suffix_for_title_tag}"
-            _tag="${_base}-NoVer_${_kv}-${_sl}${_effective_suffix_for_title_tag}"
+            # 如果有自定义后缀，则版本号部分标记为 Custom，否则标记为 NoVer (如果 Suki 版本号无效)
+            _version_indicator="NoVer"
+            if [[ -n "${{ github.event.inputs.custom_version_suffix }}" ]]; then
+                _version_indicator="Custom"
+            elif [[ "$_svn" != "NoVer" && "$_svn" =~ ^[0-9]+$ ]]; then # 如果没有自定义后缀，但 Suki 版本号有效
+                 _version_indicator="${_svn}" # 仍然使用 SukiSU 版本号
+                 _base="SukiSUUltra"
+                 _tit="${_base}-${_svn}" # 标题也用 SukiSU 版本号
+            fi
+
+
+            if [[ "$_version_indicator" != "NoVer" && "$_version_indicator" != "Custom" ]]; then # 使用SukiSU版本号
+                 _aname="AnyKernel3_${_base}_${_version_indicator}_${_kv}-${_sl}${_suf_for_artifact_name}"
+                 _tit="${_base}-${_version_indicator}"
+                 _tag="${_base}-${_version_indicator}_${_kv}-${_sl}${_suf_for_artifact_name}"
+            else # 使用 NoVer 或 Custom
+                _aname="AnyKernel3_${_base}_${_version_indicator}_${_kv}-${_sl}${_effective_suffix_for_title_tag}"
+                _tit="${_base}-${_version_indicator}${_effective_suffix_for_title_tag}"
+                _tag="${_base}-${_version_indicator}_${_kv}-${_sl}${_effective_suffix_for_title_tag}"
+            fi
           fi
           
           echo "artifact_name_for_release=$(echo "$_aname" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_tag_name=$(echo "$_tag" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_title_name=${_tit}" >> "$GITHUB_OUTPUT"
 
-  create_release:
+  create_release: 
     name: 创建发行版 
     needs: kernel_build_core
     permissions:
