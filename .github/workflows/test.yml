@@ -178,11 +178,10 @@ jobs:
 
       - name: 生成版本后缀和日期
         id: generate_suffixes
-        env: # ***** YAML 语法修正开始 *****
+        env:
           USER_PROVIDED_SUFFIX: ${{ github.event.inputs.custom_version_suffix }}
           SELECTED_AV_ENV: ${{ env.SELECTED_ANDROID_VERSION }}
           SELECTED_KV_ENV: ${{ env.SELECTED_KERNEL_VERSION }}
-          # ***** YAML 语法修正结束 *****
         run: |
           set -euo pipefail; final_kernel_local_version=""; artifact_name_suffix_part=""
           current_date_yyyymmdd=$(date +%Y%m%d); current_date_formatted=$(date +"%Y年%m月%d日")
@@ -229,16 +228,25 @@ jobs:
           if ccache --version | grep -q 'Zstd'; then ccache --set-config=compression_type=zstd; fi
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV; ccache -s
 
+      # ***** YAML 语法修正开始 *****
       - name: 还原ccache缓存
         uses: actions/cache@v4
-        with: { path: ~/.ccache, key: "${{ runner.os }}-ccache-v2-${{ github.event.inputs.kernel_to_build }}-${{ hashFiles('.github/workflows/**.yml') }}", restore-keys: |
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-v2-${{ github.event.inputs.kernel_to_build }}-${{ hashFiles('.github/workflows/**.yml') }}
+          restore-keys: |
             ${{ runner.os }}-ccache-v2-${{ github.event.inputs.kernel_to_build }}-
-            ${{ runner.os }}-ccache-v2- }
+            ${{ runner.os }}-ccache-v2-
+      # ***** YAML 语法修正结束 *****
 
       - name: 缓存预编译工具链
         id: cache-toolchain
         uses: actions/cache@v4
-        with: { path: "kernel-build-tools\nmkbootimg", key: toolchain-${{ runner.os }}-v3 }
+        with:
+          path: |
+            kernel-build-tools
+            mkbootimg
+          key: toolchain-${{ runner.os }}-v3
 
       - name: 下载预编译工具链 (若缓存未命中)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -378,6 +386,7 @@ jobs:
           if ! cd ./common; then
             echo "::error::[SUSFS Diag] Failed to cd into ./common. Subsequent patch may fail or apply to wrong directory."
             # 在此诊断模式下，即使 cd 失败也尝试继续，但后续 patch 路径可能不正确
+            # 如果 common 目录不存在，后续对 SUSFS_PATCH_FILENAME_IN_COMMON 的 -f 判断会失败
           else
             SUSFS_PATCH_FILENAME_IN_COMMON="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
             if [ -f "./${SUSFS_PATCH_FILENAME_IN_COMMON}" ]; then # 此判断在 KERNEL_SRC_ROOT/common 下执行
