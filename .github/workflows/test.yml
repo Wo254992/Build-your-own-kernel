@@ -1,4 +1,4 @@
-name: 内核编译
+name: A内核编译
 
 permissions:
   contents: read # 默认赋予读取权限，create_release job 会覆盖此设置以获取写入权限
@@ -574,15 +574,15 @@ jobs:
               cd "$COMMON_DIR_PATH" || exit 1 # 进入 common 目录
               ZRAM_PATCH_BASE="${GITHUB_WORKSPACE}/SukiSU_patch/other/zram"
 
-              # 修复：确保 lz4k 相关文件复制到正确的目标目录 (common/include/linux, common/lib, common/crypto)
+              # 显式复制 lz4k 相关文件到正确的目标目录
               local src_include_path="${ZRAM_PATCH_BASE}/lz4k/include/linux"
               local dest_include_path="./include/linux" # 相对于 $COMMON_DIR_PATH
               if [ -d "$src_include_path" ]; then
                 mkdir -p "$dest_include_path"
-                if [ -n "$(ls -A "$src_include_path")" ]; then
+                if [ -n "$(ls -A "$src_include_path")" ]; then # 确保源目录非空
                   cp -r "${src_include_path}/." "$dest_include_path/" || { echo "::error::Copy failed for $src_include_path"; exit 1; }
                 else
-                  echo "::warning::Source directory $src_include_path is empty."
+                  echo "::warning::ZRAM source directory $src_include_path is empty."
                 fi
               else
                 echo "::warning::ZRAM source directory $src_include_path not found."
@@ -592,53 +592,54 @@ jobs:
               local dest_lib_path="./lib" # 相对于 $COMMON_DIR_PATH
               if [ -d "$src_lib_path" ]; then
                 mkdir -p "$dest_lib_path"
-                if [ -n "$(ls -A "$src_lib_path")" ]; then
+                if [ -n "$(ls -A "$src_lib_path")" ]; then # 确保源目录非空
                   cp -r "${src_lib_path}/." "$dest_lib_path/" || { echo "::error::Copy failed for $src_lib_path"; exit 1; }
                 else
-                  echo "::warning::Source directory $src_lib_path is empty."
+                  echo "::warning::ZRAM source directory $src_lib_path is empty."
                 fi
               else
                 echo "::warning::ZRAM source directory $src_lib_path not found."
               fi
 
-              # ***** 这是针对 lz4k.o 错误的关键修复 *****
+              # ***** 关键修复: lz4k.o 编译错误通常因为这里的源文件没有正确放置 *****
               local src_crypto_path="${ZRAM_PATCH_BASE}/lz4k/crypto"
               local dest_crypto_path="./crypto" # 相对于 $COMMON_DIR_PATH
               if [ -d "$src_crypto_path" ]; then
                 mkdir -p "$dest_crypto_path"
-                if [ -n "$(ls -A "$src_crypto_path")" ]; then
+                if [ -n "$(ls -A "$src_crypto_path")" ]; then # 确保源目录非空
                   cp -r "${src_crypto_path}/." "$dest_crypto_path/" || { echo "::error::Copy failed for $src_crypto_path"; exit 1; }
-                  echo "Successfully copied lz4k crypto sources to $dest_crypto_path"
+                  echo "Successfully copied lz4k crypto sources to $dest_crypto_path for kernel version ${{ env.SELECTED_KERNEL_VERSION }}"
                 else
-                  echo "::warning::Source directory $src_crypto_path is empty."
+                  echo "::warning::ZRAM source directory $src_crypto_path is empty. This might cause build issues if lz4k crypto is enabled."
                 fi
               else
-                # 如果 CONFIG_CRYPTO_LZ4K=y 被设置，这个目录是必须的
-                echo "::error::ZRAM: Source directory for lz4k crypto ('$src_crypto_path') not found. This is required if CONFIG_CRYPTO_LZ4K is enabled."
+                # 如果 CONFIG_CRYPTO_LZ4K=y (通常与 ZRAM 一起启用), 这个目录是必需的。
+                echo "::error::ZRAM: Source directory for lz4k crypto ('$src_crypto_path') not found. This is required if CONFIG_CRYPTO_LZ4K is enabled for kernel version ${{ env.SELECTED_KERNEL_VERSION }}."
                 exit 1
               fi
 
               if [ -d "${ZRAM_PATCH_BASE}/lz4k_oplus" ]; then
-                mkdir -p ./lib # 确保 ./lib 存在
+                mkdir -p ./lib
                 cp -r "${ZRAM_PATCH_BASE}/lz4k_oplus" ./lib/ || { echo "::error::lz4k_oplus copy to lib failed"; exit 1; }
               else
                 echo "::warning::ZRAM source directory ${ZRAM_PATCH_BASE}/lz4k_oplus not found."
               fi
 
+              # 应用针对特定内核版本的 .patch 文件
               LZ4KD_PATCH_PATH="${ZRAM_PATCH_BASE}/zram_patch/${{ env.SELECTED_KERNEL_VERSION }}/lz4kd.patch"
               if [ -f "$LZ4KD_PATCH_PATH" ]; then
-                cp "$LZ4KD_PATCH_PATH" ./lz4kd.patch
+                cp "$LZ4KD_PATCH_PATH" ./lz4kd.patch # 复制到 $COMMON_DIR_PATH
                 patch -p1 -F 3 < lz4kd.patch || { echo "::error::lz4kd patch failed for ${{ env.SELECTED_KERNEL_VERSION }}"; exit 1; }
               else
-                echo "::warning::lz4kd patch not found for ${{ env.SELECTED_KERNEL_VERSION }} at $LZ4KD_PATCH_PATH"
+                echo "::warning::lz4kd.patch not found for kernel version ${{ env.SELECTED_KERNEL_VERSION }} at $LZ4KD_PATCH_PATH"
               fi
 
               LZ4K_OPLUS_PATCH_PATH="${ZRAM_PATCH_BASE}/zram_patch/${{ env.SELECTED_KERNEL_VERSION }}/lz4k_oplus.patch"
               if [ -f "$LZ4K_OPLUS_PATCH_PATH" ]; then
-                cp "$LZ4K_OPLUS_PATCH_PATH" ./lz4k_oplus.patch
+                cp "$LZ4K_OPLUS_PATCH_PATH" ./lz4k_oplus.patch # 复制到 $COMMON_DIR_PATH
                 patch -p1 -F 3 < lz4k_oplus.patch || { echo "::error::lz4k_oplus patch failed for ${{ env.SELECTED_KERNEL_VERSION }}"; exit 1; }
               else
-                echo "::warning::lz4k_oplus patch not found for ${{ env.SELECTED_KERNEL_VERSION }} at $LZ4K_OPLUS_PATCH_PATH"
+                echo "::warning::lz4k_oplus.patch not found for kernel version ${{ env.SELECTED_KERNEL_VERSION }} at $LZ4K_OPLUS_PATCH_PATH"
               fi
               echo "ZRAM compression patches process finished."
             else
@@ -888,7 +889,7 @@ jobs:
 
           if [[ "${{ github.event.inputs.use_zram }}" == "true" ]]; then
             check_config "CONFIG_ZRAM" "y" "true"
-            check_config "CONFIG_CRYPTO_LZ4K" "y" "true" # 重要：确保 lz4k 配置存在，因为编译时需要
+            check_config "CONFIG_CRYPTO_LZ4K" "y" "true" # 重要：确保 lz4k 配置存在
           fi
 
           if [ "$CRITICAL_FAIL" -ne 0 ]; then
@@ -1061,10 +1062,11 @@ jobs:
           echo "Validating kernel image type: $IMAGE_TO_VALIDATE"
           file_output=$(file "$IMAGE_TO_VALIDATE")
           echo "File command output: $file_output"
-          if echo "$file_output" | grep -q "ARM aarch64" && echo "$file_output" | grep -q "Linux kernel"; then
+          # ***** 关键修复：修改 grep 条件以正确匹配 "ARM64" *****
+          if echo "$file_output" | grep -q "ARM64" && echo "$file_output" | grep -q "Linux kernel"; then
             echo "Kernel image validation successful: Looks like an ARM64 Linux kernel image."
           else
-            echo "::error::Kernel image validation FAILED. Output does not match expected ARM64 Linux kernel image type."
+            echo "::error::Kernel image validation FAILED. Output ('$file_output') does not match expected ARM64 Linux kernel image type."
             exit 1
           fi
 
