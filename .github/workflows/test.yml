@@ -821,7 +821,7 @@ jobs:
             _tag="${_base}-${_version_indicator_for_naming}_${_kv}-${_sl}${_effective_suffix_for_naming}"
           fi
           
-          echo "Calculated _aname_for_release for job output: $_aname_for_release"
+          echo "Calculated _aname_for_release for job output: $_aname_for_release" # Debugging echo
           echo "artifact_name_for_release=$(echo "$_aname_for_release" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_tag_name=$(echo "$_tag" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_title_name=${_tit}" >> "$GITHUB_OUTPUT"
@@ -839,13 +839,13 @@ jobs:
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends zip
       - name: 调试 Artifact 下载参数
-        run: |
-          echo "预期下载的固定 Artifact 名称: ${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }}" 
-          echo "最终 Release 文件名基础: ${{ needs.kernel_build_core.outputs.artifact_name_for_release }}"
+        run: | # *** 修正: 直接使用字面量名称 ***
+          echo "期望下载的 Artifact 固定名称: AnyKernel3_Content_For_Release" 
+          echo "最终 Release 文件名基础将是: ${{ needs.kernel_build_core.outputs.artifact_name_for_release }}"
       - name: 下载内核刷机包 (Artifact)
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }} # 使用 kernel_build_core job 中定义的固定名称
+          name: "AnyKernel3_Content_For_Release" # *** 修正: 直接使用固定的字面量名称 ***
           path: downloaded_artifact/
       - name: 准备刷机包并设置路径
         id: package_kernel
@@ -856,22 +856,13 @@ jobs:
           echo "查看 downloaded_artifact 目录内容:"
           ls -R downloaded_artifact
           
-          # 确保 downloaded_artifact 目录存在且包含内容
-          if [ ! -d "downloaded_artifact" ] || [ -z "$(ls -A downloaded_artifact)" ]; then
-            echo "::error::downloaded_artifact 目录不存在或为空。Artifact '${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }}' 可能未成功下载或其内容为空。"
-            exit 1
-          fi
-
           cd downloaded_artifact
           final_zip_name_base="${{ needs.kernel_build_core.outputs.artifact_name_for_release }}"
           final_zip_name="${final_zip_name_base}.zip"
           echo "最终 ZIP 文件名将是: $final_zip_name"
           
-          # 检查当前目录 (downloaded_artifact) 是否就是 AnyKernel3 的根目录，或者 AnyKernel3 是其下的一个子目录
-          # actions/download-artifact v4 默认行为是：如果下载的 artifact 是一个文件夹，它会把文件夹内的内容放到指定的 path 下。
-          # 所以 downloaded_artifact 应该直接是 AnyKernel3 的内容。
           if [ -z "$(ls -A .)" ]; then 
-            echo "::error::当前目录 (原 downloaded_artifact) 为空，无法打包。"
+            echo "::error::Downloaded artifact directory (path: downloaded_artifact/) is empty. Artifact 'AnyKernel3_Content_For_Release' 可能未成功下载或其内容为空。"
             exit 1; 
           fi
           
