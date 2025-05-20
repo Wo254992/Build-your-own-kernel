@@ -137,8 +137,7 @@ jobs:
     needs: version_probe
     runs-on: ubuntu-latest
     outputs:
-      # artifact_name_for_release: ${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }} # 旧的，不再直接使用这个给 release job
-      final_artifact_zip_name: ${{ steps.create_and_upload_final_zip.outputs.final_zip_filename_output }} # 新增输出：最终的 ZIP 文件名
+      final_zip_artifact_name: ${{ steps.create_and_upload_final_zip.outputs.final_zip_filename_output }} # 输出最终的ZIP文件名给 release job
       release_tag: ${{ steps.prepare_release_outputs.outputs.release_tag_name }}
       release_title: ${{ steps.prepare_release_outputs.outputs.release_title_name }}
       final_kernel_local_version_output: ${{ steps.generate_version_elements.outputs.final_kernel_local_version_for_body }}
@@ -206,7 +205,7 @@ jobs:
         run: |
           set -euo pipefail
           _actual_localversion_for_kernel=""
-          _artifact_naming_suffix_for_env="" # 用于 prepare_release_outputs 和最终 artifact 命名
+          _artifact_naming_suffix_for_env="" 
           _current_date_yyyymmdd=$(date +%Y%m%d)
           _current_date_formatted_for_body=$(date +"%Y年%m月%d日")
 
@@ -797,21 +796,22 @@ jobs:
             _tag="${_base}-${_version_indicator_for_naming}_${_kv}-${_sl}${_effective_suffix_for_naming}"
           fi
           
-          echo "Calculated _aname_for_release for job output: $_aname_for_release"
+          echo "Calculated artifact_name_for_release for job output: $_aname_for_release"
           echo "artifact_name_for_release=$(echo "$_aname_for_release" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_tag_name=$(echo "$_tag" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_title_name=${_tit}" >> "$GITHUB_OUTPUT"
 
-      - name: 创建并上传最终刷机包
+      - name: 创建并上传最终刷机包作为Artifact
         id: create_and_upload_final_zip
         shell: bash
         run: |
           set -euo pipefail
+          # 使用 prepare_release_outputs 步骤计算出的 artifact_name_for_release 来命名 ZIP 文件
           FINAL_ZIP_BASE_NAME="${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}"
           FINAL_ZIP_FILENAME="${FINAL_ZIP_BASE_NAME}.zip"
           
-          echo "Final ZIP base name: $FINAL_ZIP_BASE_NAME"
-          echo "Final ZIP full filename: $FINAL_ZIP_FILENAME"
+          echo "Final ZIP base name from prepare_release_outputs: $FINAL_ZIP_BASE_NAME"
+          echo "Final ZIP full filename for artifact upload: $FINAL_ZIP_FILENAME"
 
           cd "${{ github.workspace }}/AnyKernel3"
           if [ -z "$(ls -A .)" ]; then 
@@ -825,14 +825,14 @@ jobs:
             echo "::error::Failed to create final ZIP: ${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}"
             exit 1
           fi
-          echo "final_zip_path_output=${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}" >> "$GITHUB_OUTPUT"
+          # 输出 ZIP 文件名，以便 create_release 作业可以引用它
           echo "final_zip_filename_output=${FINAL_ZIP_FILENAME}" >> "$GITHUB_OUTPUT"
           
-      - name: 上传最终刷机包作为Artifact
+      - name: 上传最终刷机包 (Artifact)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.create_and_upload_final_zip.outputs.final_zip_filename_output }} 
-          path: ${{ steps.create_and_upload_final_zip.outputs.final_zip_path_output }}
+          path: ${{ github.workspace }}/${{ steps.create_and_upload_final_zip.outputs.final_zip_filename_output }} 
           if-no-files-found: error
 
       - name: 构建环境清理
@@ -867,14 +867,14 @@ jobs:
       - name: 调试 Artifact 下载参数
         run: |
           echo "期望下载的 Artifact (已打包ZIP) 名称: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }}"
-          echo "最终 Release 文件名基础将是: ${{ needs.kernel_build_core.outputs.artifact_name_for_release }}" # 这个 artifact_name_for_release 和上面的 zip 名基础部分应该一致
+          echo "最终 Release 文件名基础将是 (用于校验): ${{ needs.kernel_build_core.outputs.artifact_name_for_release }}" 
           echo "最终 Release 标签: ${{ needs.kernel_build_core.outputs.release_tag }}"
           echo "最终 Release 标题: ${{ needs.kernel_build_core.outputs.release_title }}"
       - name: 下载内核刷机包 (Artifact)
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }} 
-          path: . # 直接下载到当前工作目录，下载下来文件名就是 final_zip_filename_output
+          path: . # 直接下载到当前工作目录，下载下来的就是那个 ZIP 文件
       - name: 创建 Release 并上传刷机包
         uses: ncipollo/release-action@v1
         with:
