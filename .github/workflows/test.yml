@@ -205,7 +205,7 @@ jobs:
         run: |
           set -euo pipefail
           _actual_localversion_for_kernel=""
-          _artifact_naming_suffix_for_release_outputs="" # 用于prepare_release_outputs的后缀
+          _artifact_naming_suffix_for_release_outputs=""
           _current_date_yyyymmdd=$(date +%Y%m%d)
           _current_date_formatted_for_body=$(date +"%Y年%m月%d日")
 
@@ -230,11 +230,10 @@ jobs:
           fi
           
           echo "FINAL_KERNEL_LOCAL_VERSION=${_actual_localversion_for_kernel}" >> "$GITHUB_ENV"
-          # 这个 ARTIFACT_NAME_SUFFIX_PART_ENV 是给 upload-artifact 的 name 格式化用的，但我们现在用固定名了，所以它主要给 prepare_release_outputs 用
           echo "ARTIFACT_NAME_SUFFIX_PART_ENV=${_artifact_naming_suffix_for_release_outputs}" >> "$GITHUB_ENV" 
           echo "final_kernel_local_version_for_body=${_actual_localversion_for_kernel}" >> "$GITHUB_OUTPUT"
           echo "current_build_date_formatted_for_body=${_current_date_formatted_for_body}" >> "$GITHUB_OUTPUT"
-          # 这个输出给 prepare_release_outputs step
+          # 此输出用于 prepare_release_outputs step
           echo "artifact_naming_suffix_for_prepare=${_artifact_naming_suffix_for_release_outputs}" >> "$GITHUB_OUTPUT"
 
 
@@ -376,7 +375,7 @@ jobs:
             
             _MANIFEST_BRANCH_FOR_INIT="common-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
             if [[ -n "${{ env.SELECTED_OS_PATCH_LEVEL }}" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "_" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "X" ]]; then
-                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
+                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
             elif [[ "${{ github.event.inputs.kernel_to_build }}" == *"_X_lts_"* || "${{ github.event.inputs.kernel_to_build }}" == *"_lts_"* ]]; then
                 _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-lts"
             fi
@@ -448,7 +447,6 @@ jobs:
       - name: SUSFS特性增强
         working-directory: ${{ env.KERNEL_SRC_ROOT }} 
         shell: bash
-        # このステップは現在有効です。SUSFSが機能しているため。
         run: |
           echo "[SUSFS Diag] Applying SUSFS patches from susfs4ksu..."
           mkdir -p ./common/fs && mkdir -p ./common/include/linux
@@ -555,7 +553,7 @@ jobs:
           CONFIG_FILE_PATH="${{ env.GKI_DEFCONFIG_PATH_ENV }}"
           if [ ! -f "$CONFIG_FILE_PATH" ]; then echo "::error::gki_defconfig not found for ZRAM config"; exit 1; fi
           update_cfg() {
-            local k="$1"; local v_param="$2"; local file="$3" # Renamed v to v_param to avoid conflict with shell's -v
+            local k="$1"; local v_param="$2"; local file="$3"
             sed -i "/^${k}=/d" "$file"; sed -i "/^# ${k} is not set/d" "$file"; echo "${k}=${v_param}" >> "$file"
           }
           update_cfg "CONFIG_ZSMALLOC" "y" "$CONFIG_FILE_PATH"
@@ -577,7 +575,7 @@ jobs:
         run: |
           set -euo pipefail
           GKI_PATH="${{ env.GKI_DEFCONFIG_PATH_ENV }}"; if [ ! -f "$GKI_PATH" ]; then echo "::error::gki_defconfig not found for SUSFS config"; exit 1; fi
-          upd_cfg() { local k="$1"; local v_param="$2"; local file="$3"; sed -i -e "/^${k}=/d" -e "/^# ${k} is not set/d" "$file"; echo "${k}=${v_param}" >> "$file"; } # Renamed v to v_param
+          upd_cfg() { local k="$1"; local v_param="$2"; local file="$3"; sed -i -e "/^${k}=/d" -e "/^# ${k} is not set/d" "$file"; echo "${k}=${v_param}" >> "$file"; }
           cfgs_y=( "CONFIG_KSU" "CONFIG_KSU_MANUAL_HOOK" "CONFIG_TMPFS_XATTR" "CONFIG_TMPFS_POSIX_ACL" "CONFIG_IP_NF_TARGET_TTL" "CONFIG_IP6_NF_TARGET_HL" "CONFIG_IP6_NF_MATCH_HL" "CONFIG_TCP_CONG_ADVANCED" "CONFIG_TCP_CONG_BBR" "CONFIG_NET_SCH_FQ" "CONFIG_KSU_SUSFS" "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT" "CONFIG_KSU_SUSFS_SUS_PATH" "CONFIG_KSU_SUSFS_SUS_MOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT" "CONFIG_KSU_SUSFS_SUS_KSTAT" "CONFIG_KSU_SUSFS_TRY_UMOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT" "CONFIG_KSU_SUSFS_SPOOF_UNAME" "CONFIG_KSU_SUSFS_ENABLE_LOG" "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS" "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG" "CONFIG_KSU_SUSFS_OPEN_REDIRECT" )
           cfgs_n=( "CONFIG_KSU_SUSFS_SUS_SU" "CONFIG_KSU_SUSFS_SUS_OVERLAYFS" "CONFIG_TCP_CONG_BIC" "CONFIG_TCP_CONG_WESTWOOD" "CONFIG_TCP_CONG_HTCP" )
           for ck in "${cfgs_y[@]}"; do upd_cfg "$ck" "y" "$GKI_PATH"; done
@@ -798,7 +796,7 @@ jobs:
           _sl="${{ env.SELECTED_SUB_LEVEL }}"; 
           _suf_for_release_name="${{ env.ARTIFACT_NAME_SUFFIX_PART_ENV }}" 
           _base="SukiSUUltra"; _tit=""; _tag=""
-          _final_local_version_for_release="${{ env.FINAL_KERNEL_LOCAL_VERSION }}"
+          # _final_local_version_for_release="${{ env.FINAL_KERNEL_LOCAL_VERSION }}" # This is already in outputs
 
           if [[ "$_svn" != "NoVer" && "$_svn" =~ ^[0-9]+$ && -z "${{ github.event.inputs.custom_version_suffix }}" ]]; then
             _aname_for_release="AnyKernel3_${_base}_${_svn}_${_kv}-${_sl}${_suf_for_release_name}"
@@ -844,7 +842,7 @@ jobs:
       - name: 下载内核刷机包 (Artifact)
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.INTERMEDIATE_ARTIFACT_NAME }} # 使用固定的内部 Artifact 名称下载
+          name: ${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }} # *** 修正这里 ***
           path: downloaded_artifact/
       - name: 准备刷机包并设置路径
         id: package_kernel
@@ -854,7 +852,7 @@ jobs:
           cd downloaded_artifact
           final_zip_name="${{ needs.kernel_build_core.outputs.artifact_name_for_release }}.zip"
           echo "Final ZIP name will be: $final_zip_name"
-          if [ -z "$(ls -A .)" ]; then echo "::error::Downloaded artifact directory (path: downloaded_artifact/) is empty. Artifact '${{ env.INTERMEDIATE_ARTIFACT_NAME }}' might not have been uploaded correctly or contained no files."; exit 1; fi
+          if [ -z "$(ls -A .)" ]; then echo "::error::Downloaded artifact directory (path: downloaded_artifact/) is empty. Artifact '${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }}' might not have been uploaded correctly or contained no files."; exit 1; fi
           zip -r9 "../${final_zip_name}" . 
           cd ..
           if [ ! -f "${final_zip_name}" ]; then echo "::error::Failed to create zip package named ${final_zip_name}."; exit 1; fi
