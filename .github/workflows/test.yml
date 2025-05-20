@@ -137,8 +137,8 @@ jobs:
     needs: version_probe
     runs-on: ubuntu-latest
     outputs:
-      # artifact_name_for_release: ${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }} # 不再需要这个作为单独的输出给 release job
-      final_zip_filename_output: ${{ steps.create_flashable_zip.outputs.final_zip_filename_output }} # 新增输出：最终的 ZIP 文件名
+      # artifact_name_for_release: ${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }} # 旧的，不再直接使用这个给 release job
+      final_artifact_zip_name: ${{ steps.create_and_upload_final_zip.outputs.final_zip_filename_output }} # 新增输出：最终的 ZIP 文件名
       release_tag: ${{ steps.prepare_release_outputs.outputs.release_tag_name }}
       release_title: ${{ steps.prepare_release_outputs.outputs.release_title_name }}
       final_kernel_local_version_output: ${{ steps.generate_version_elements.outputs.final_kernel_local_version_for_body }}
@@ -156,7 +156,7 @@ jobs:
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json 
       DEBIAN_FRONTEND: noninteractive
-      # INTERMEDIATE_ARTIFACT_NAME 不再需要，因为我们直接上传最终的 ZIP 文件
+      # INTERMEDIATE_ARTIFACT_NAME 不再需要，因为我们直接上传最终的 ZIP 文件作为 Artifact
 
     steps:
       - name: 参数校验
@@ -206,7 +206,7 @@ jobs:
         run: |
           set -euo pipefail
           _actual_localversion_for_kernel=""
-          _artifact_naming_suffix_for_env="" # 用于prepare_release_outputs step 和 最终artifact命名
+          _artifact_naming_suffix_for_env="" # 用于 prepare_release_outputs 和最终 artifact 命名
           _current_date_yyyymmdd=$(date +%Y%m%d)
           _current_date_formatted_for_body=$(date +"%Y年%m月%d日")
 
@@ -761,57 +761,6 @@ jobs:
             exit 1
           fi
           
-      # *** 修改：在 kernel_build_core 作业内直接创建最终的 ZIP 文件 ***
-      - name: 创建最终刷机包ZIP
-        id: create_final_zip
-        shell: bash
-        run: |
-          set -euo pipefail
-          FINAL_ZIP_BASE_NAME="${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}"
-          FINAL_ZIP_FILENAME="${FINAL_ZIP_BASE_NAME}.zip"
-          
-          echo "Final ZIP base name from prepare_release_outputs: $FINAL_ZIP_BASE_NAME"
-          echo "Final ZIP full filename: $FINAL_ZIP_FILENAME"
-
-          cd "${{ github.workspace }}/AnyKernel3"
-          if [ -z "$(ls -A .)" ]; then 
-            echo "::error::AnyKernel3 directory is empty before zipping."
-            exit 1
-          fi
-          echo "Zipping contents of $(pwd) into ${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}"
-          zip -r9 "${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}" .
-          
-          if [ ! -f "${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}" ]; then
-            echo "::error::Failed to create final ZIP: ${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}"
-            exit 1
-          fi
-          echo "final_zip_path_output=${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}" >> "$GITHUB_OUTPUT"
-          echo "final_zip_filename_output=${FINAL_ZIP_FILENAME}" >> "$GITHUB_OUTPUT"
-
-      - name: 构建产物上传 (上传已打包好的ZIP)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.create_final_zip.outputs.final_zip_filename_output }} # 使用最终的 ZIP 文件名作为 Artifact 名称
-          path: ${{ steps.create_final_zip.outputs.final_zip_path_output }}    # 上传这个 ZIP 文件
-          if-no-files-found: error
-
-      - name: 构建环境清理
-        if: always()
-        run: |
-          set -euo pipefail
-          if [ -d "/home/runner/.cache/bazel" ]; then rm -rf /home/runner/.cache/bazel || echo "::warning::Bazel disk cache removal failed (/home/runner/.cache/bazel)."; fi
-          ccache -s
-
-      - name: 诊断日志归档
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ github.run_id }}
-          path: |
-            ${{ env.CCACHE_LOGFILE }}
-            ${{ github.workspace }}/${{ env.BAZEL_PROFILE_FILENAME }}
-          if-no-files-found: ignore
-
       - name: 发布参数准备
         id: prepare_release_outputs
         shell: bash
@@ -853,6 +802,56 @@ jobs:
           echo "release_tag_name=$(echo "$_tag" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_title_name=${_tit}" >> "$GITHUB_OUTPUT"
 
+      - name: 创建并上传最终刷机包
+        id: create_and_upload_final_zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          FINAL_ZIP_BASE_NAME="${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}"
+          FINAL_ZIP_FILENAME="${FINAL_ZIP_BASE_NAME}.zip"
+          
+          echo "Final ZIP base name: $FINAL_ZIP_BASE_NAME"
+          echo "Final ZIP full filename: $FINAL_ZIP_FILENAME"
+
+          cd "${{ github.workspace }}/AnyKernel3"
+          if [ -z "$(ls -A .)" ]; then 
+            echo "::error::AnyKernel3 directory is empty before zipping."
+            exit 1
+          fi
+          echo "Zipping contents of $(pwd) into ${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}"
+          zip -r9 "${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}" .
+          
+          if [ ! -f "${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}" ]; then
+            echo "::error::Failed to create final ZIP: ${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}"
+            exit 1
+          fi
+          echo "final_zip_path_output=${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}" >> "$GITHUB_OUTPUT"
+          echo "final_zip_filename_output=${FINAL_ZIP_FILENAME}" >> "$GITHUB_OUTPUT"
+          
+      - name: 上传最终刷机包作为Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.create_and_upload_final_zip.outputs.final_zip_filename_output }} 
+          path: ${{ steps.create_and_upload_final_zip.outputs.final_zip_path_output }}
+          if-no-files-found: error
+
+      - name: 构建环境清理
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -d "/home/runner/.cache/bazel" ]; then rm -rf /home/runner/.cache/bazel || echo "::warning::Bazel disk cache removal failed (/home/runner/.cache/bazel)."; fi
+          ccache -s
+
+      - name: 诊断日志归档
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ github.run_id }}
+          path: |
+            ${{ env.CCACHE_LOGFILE }}
+            ${{ github.workspace }}/${{ env.BAZEL_PROFILE_FILENAME }}
+          if-no-files-found: ignore
+
   create_release: 
     name: 创建发行版 
     needs: kernel_build_core
@@ -868,13 +867,14 @@ jobs:
       - name: 调试 Artifact 下载参数
         run: |
           echo "期望下载的 Artifact (已打包ZIP) 名称: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }}"
+          echo "最终 Release 文件名基础将是: ${{ needs.kernel_build_core.outputs.artifact_name_for_release }}" # 这个 artifact_name_for_release 和上面的 zip 名基础部分应该一致
           echo "最终 Release 标签: ${{ needs.kernel_build_core.outputs.release_tag }}"
           echo "最终 Release 标题: ${{ needs.kernel_build_core.outputs.release_title }}"
       - name: 下载内核刷机包 (Artifact)
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }} # 下载已命名的 ZIP Artifact
-          path: . # 直接下载到当前工作目录
+          name: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }} 
+          path: . # 直接下载到当前工作目录，下载下来文件名就是 final_zip_filename_output
       - name: 创建 Release 并上传刷机包
         uses: ncipollo/release-action@v1
         with:
