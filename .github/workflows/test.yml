@@ -821,7 +821,7 @@ jobs:
             _tag="${_base}-${_version_indicator_for_naming}_${_kv}-${_sl}${_effective_suffix_for_naming}"
           fi
           
-          echo "Calculated _aname_for_release for job output: $_aname_for_release" # Debugging echo
+          echo "Calculated _aname_for_release for job output: $_aname_for_release"
           echo "artifact_name_for_release=$(echo "$_aname_for_release" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_tag_name=$(echo "$_tag" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_title_name=${_tit}" >> "$GITHUB_OUTPUT"
@@ -839,13 +839,13 @@ jobs:
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends zip
       - name: 调试 Artifact 下载参数
-        run: | # *** 修正: 直接使用字面量名称 ***
+        run: |
           echo "期望下载的 Artifact 固定名称: AnyKernel3_Content_For_Release" 
           echo "最终 Release 文件名基础将是: ${{ needs.kernel_build_core.outputs.artifact_name_for_release }}"
       - name: 下载内核刷机包 (Artifact)
         uses: actions/download-artifact@v4
         with:
-          name: "AnyKernel3_Content_For_Release" # *** 修正: 直接使用固定的字面量名称 ***
+          name: "AnyKernel3_Content_For_Release" # *** 使用固定的字面量名称 ***
           path: downloaded_artifact/
       - name: 准备刷机包并设置路径
         id: package_kernel
@@ -853,7 +853,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "当前工作目录: $(pwd)"
-          echo "查看 downloaded_artifact 目录内容:"
+          echo "查看 downloaded_artifact 目录内容 (应仅为 AnyKernel3 文件):"
           ls -R downloaded_artifact
           
           cd downloaded_artifact
