@@ -861,19 +861,23 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           artifacts: ${{ steps.package_kernel.outputs.packaged_zip }}
-          tag: ${{ needs.kernel_build_core.outputs.release_tag }}
-          name: ${{ needs.kernel_build_core.outputs.release_title }}
+          tag: ${{ needs.build_kernel.outputs.release_tag }}
+          name: ${{ needs.build_kernel.outputs.release_title }}
           body: |
             自动构建的内核发行版。
+
             **核心信息:**
             - 内核版本构建输入: `${{ github.event.inputs.kernel_to_build }}`
-            - SukiSU 版本 (计算): `${{ needs.kernel_build_core.outputs.sukisu_version_from_build_job }}`
+            - SukiSU 版本 (计算): `${{ needs.build_kernel.outputs.sukisu_version_from_build_job }}`
             - SukiSU 功能分支: `${{ github.event.inputs.kernelsu_branch }}`
-            - 内核名 (LOCALVERSION): `${{ needs.kernel_build_core.outputs.parsed_kernel_version_output }}.${{ needs.kernel_build_core.outputs.parsed_sub_level_output }}${{ needs.kernel_build_core.outputs.final_kernel_local_version_output }}`
-            - 构建日期: `${{ needs.kernel_build_core.outputs.current_build_date_formatted_output }}`
+            - 自定义版本后缀 (如有): `${{ github.event.inputs.custom_version_suffix == '' && '仿官方随机生成' || format('自定义: {0}', github.event.inputs.custom_version_suffix) }}`
+            - 内核名 (LOCALVERSION): `${{ needs.build_kernel.outputs.parsed_kernel_version_output }}.${{ needs.build_kernel.outputs.parsed_sub_level_output }}${{ needs.build_kernel.outputs.final_kernel_local_version_output }}`
+            - 构建日期: `${{ needs.build_kernel.outputs.current_build_date_formatted_output }}`
+
             **构建选项:**
             - 使用ZRAM: `${{ github.event.inputs.use_zram }}`
-            - 使用KPM: `${{ needs.kernel_build_core.outputs.effective_kpm_setting }}` (实际生效的KPM设置)
+            - 使用KPM: `${{ needs.build_kernel.outputs.effective_kpm_setting }}` (实际生效的KPM设置)
+
             ---
             *SHA: `${{ github.sha }}`*
             *构建ID: `${{ github.run_id }}`*
