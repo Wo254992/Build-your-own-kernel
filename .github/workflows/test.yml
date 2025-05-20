@@ -137,7 +137,8 @@ jobs:
     needs: version_probe
     runs-on: ubuntu-latest
     outputs:
-      artifact_name_for_release: ${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}
+      # artifact_name_for_release: ${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }} # 不再需要这个作为单独的输出给 release job
+      final_zip_filename_output: ${{ steps.create_flashable_zip.outputs.final_zip_filename_output }} # 新增输出：最终的 ZIP 文件名
       release_tag: ${{ steps.prepare_release_outputs.outputs.release_tag_name }}
       release_title: ${{ steps.prepare_release_outputs.outputs.release_title_name }}
       final_kernel_local_version_output: ${{ steps.generate_version_elements.outputs.final_kernel_local_version_for_body }}
@@ -155,7 +156,7 @@ jobs:
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json 
       DEBIAN_FRONTEND: noninteractive
-      INTERMEDIATE_ARTIFACT_NAME: "AnyKernel3_Content_For_Release" # 作业间传递的固定 Artifact 名称
+      # INTERMEDIATE_ARTIFACT_NAME 不再需要，因为我们直接上传最终的 ZIP 文件
 
     steps:
       - name: 参数校验
@@ -205,14 +206,14 @@ jobs:
         run: |
           set -euo pipefail
           _actual_localversion_for_kernel=""
-          _artifact_naming_suffix_for_prepare_step="" 
+          _artifact_naming_suffix_for_env="" # 用于prepare_release_outputs step 和 最终artifact命名
           _current_date_yyyymmdd=$(date +%Y%m%d)
           _current_date_formatted_for_body=$(date +"%Y年%m月%d日")
 
           if [[ -n "$USER_PROVIDED_CUSTOM_SUFFIX" ]]; then
             _actual_localversion_for_kernel="-$USER_PROVIDED_CUSTOM_SUFFIX" 
-            _artifact_naming_suffix_for_prepare_step="$USER_PROVIDED_CUSTOM_SUFFIX" 
-            echo "版本要素: 用户自定义后缀为 '$_actual_localversion_for_kernel' (用于内核) 和 '$_artifact_naming_suffix_for_prepare_step' (用于Release文件名)"
+            _artifact_naming_suffix_for_env="$USER_PROVIDED_CUSTOM_SUFFIX" 
+            echo "版本要素: 用户自定义后缀为 '$_actual_localversion_for_kernel' (用于内核) 和 '$_artifact_naming_suffix_for_env' (用于文件名)"
           else
             _kernel_fixed_part=""
             if [ "$SELECTED_AV_ENV" == "android12" ] && [ "$SELECTED_KV_ENV" == "5.10" ]; then _kernel_fixed_part="-android12-9"
@@ -225,15 +226,14 @@ jobs:
             _random_hex_11=$(head /dev/urandom | LC_ALL=C tr -dc 'a-f0-9' | head -c 11 || echo "randhex")
             _random_digits_8=$(head /dev/urandom | LC_ALL=C tr -dc '0-9' | head -c 8 || echo "randdig")
             _actual_localversion_for_kernel="${_kernel_fixed_part}-gd${_random_hex_11}-ab${_random_digits_8}" 
-            _artifact_naming_suffix_for_prepare_step="-${_current_date_yyyymmdd}" 
-            echo "版本要素: 无自定义后缀。内核 LOCALVERSION 后缀: '$_actual_localversion_for_kernel', Artifact 命名后缀: '$_artifact_naming_suffix_for_prepare_step'"
+            _artifact_naming_suffix_for_env="-${_current_date_yyyymmdd}" 
+            echo "版本要素: 无自定义后缀。内核 LOCALVERSION 后缀: '$_actual_localversion_for_kernel', Artifact 命名后缀: '$_artifact_naming_suffix_for_env'"
           fi
           
           echo "FINAL_KERNEL_LOCAL_VERSION=${_actual_localversion_for_kernel}" >> "$GITHUB_ENV"
-          echo "ARTIFACT_NAME_SUFFIX_PART_ENV=${_artifact_naming_suffix_for_prepare_step}" >> "$GITHUB_ENV" 
+          echo "ARTIFACT_NAME_SUFFIX_PART_ENV=${_artifact_naming_suffix_for_env}" >> "$GITHUB_ENV" 
           echo "final_kernel_local_version_for_body=${_actual_localversion_for_kernel}" >> "$GITHUB_OUTPUT"
           echo "current_build_date_formatted_for_body=${_current_date_formatted_for_body}" >> "$GITHUB_OUTPUT"
-          echo "artifact_naming_suffix_for_prepare=${_artifact_naming_suffix_for_prepare_step}" >> "$GITHUB_OUTPUT"
 
 
       - name: KPM策略调整
@@ -374,7 +374,7 @@ jobs:
             
             _MANIFEST_BRANCH_FOR_INIT="common-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
             if [[ -n "${{ env.SELECTED_OS_PATCH_LEVEL }}" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "_" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "X" ]]; then
-                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
+                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
             elif [[ "${{ github.event.inputs.kernel_to_build }}" == *"_X_lts_"* || "${{ github.event.inputs.kernel_to_build }}" == *"_lts_"* ]]; then
                 _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-lts"
             fi
@@ -760,12 +760,39 @@ jobs:
             echo "::error::Validation FAILED: '$file_out'"
             exit 1
           fi
+          
+      # *** 修改：在 kernel_build_core 作业内直接创建最终的 ZIP 文件 ***
+      - name: 创建最终刷机包ZIP
+        id: create_final_zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          FINAL_ZIP_BASE_NAME="${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}"
+          FINAL_ZIP_FILENAME="${FINAL_ZIP_BASE_NAME}.zip"
+          
+          echo "Final ZIP base name from prepare_release_outputs: $FINAL_ZIP_BASE_NAME"
+          echo "Final ZIP full filename: $FINAL_ZIP_FILENAME"
 
-      - name: 构建产物上传
+          cd "${{ github.workspace }}/AnyKernel3"
+          if [ -z "$(ls -A .)" ]; then 
+            echo "::error::AnyKernel3 directory is empty before zipping."
+            exit 1
+          fi
+          echo "Zipping contents of $(pwd) into ${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}"
+          zip -r9 "${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}" .
+          
+          if [ ! -f "${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}" ]; then
+            echo "::error::Failed to create final ZIP: ${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}"
+            exit 1
+          fi
+          echo "final_zip_path_output=${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}" >> "$GITHUB_OUTPUT"
+          echo "final_zip_filename_output=${FINAL_ZIP_FILENAME}" >> "$GITHUB_OUTPUT"
+
+      - name: 构建产物上传 (上传已打包好的ZIP)
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.INTERMEDIATE_ARTIFACT_NAME }} 
-          path: ${{ github.workspace }}/AnyKernel3
+          name: ${{ steps.create_final_zip.outputs.final_zip_filename_output }} # 使用最终的 ZIP 文件名作为 Artifact 名称
+          path: ${{ steps.create_final_zip.outputs.final_zip_path_output }}    # 上传这个 ZIP 文件
           if-no-files-found: error
 
       - name: 构建环境清理
@@ -840,40 +867,18 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends zip
       - name: 调试 Artifact 下载参数
         run: |
-          echo "期望下载的 Artifact 固定名称: AnyKernel3_Content_For_Release" 
-          echo "最终 Release 文件名基础将是: ${{ needs.kernel_build_core.outputs.artifact_name_for_release }}"
+          echo "期望下载的 Artifact (已打包ZIP) 名称: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }}"
+          echo "最终 Release 标签: ${{ needs.kernel_build_core.outputs.release_tag }}"
+          echo "最终 Release 标题: ${{ needs.kernel_build_core.outputs.release_title }}"
       - name: 下载内核刷机包 (Artifact)
         uses: actions/download-artifact@v4
         with:
-          name: "AnyKernel3_Content_For_Release" # *** 使用固定的字面量名称 ***
-          path: downloaded_artifact/
-      - name: 准备刷机包并设置路径
-        id: package_kernel
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "当前工作目录: $(pwd)"
-          echo "查看 downloaded_artifact 目录内容 (应仅为 AnyKernel3 文件):"
-          ls -R downloaded_artifact
-          
-          cd downloaded_artifact
-          final_zip_name_base="${{ needs.kernel_build_core.outputs.artifact_name_for_release }}"
-          final_zip_name="${final_zip_name_base}.zip"
-          echo "最终 ZIP 文件名将是: $final_zip_name"
-          
-          if [ -z "$(ls -A .)" ]; then 
-            echo "::error::Downloaded artifact directory (path: downloaded_artifact/) is empty. Artifact 'AnyKernel3_Content_For_Release' 可能未成功下载或其内容为空。"
-            exit 1; 
-          fi
-          
-          zip -r9 "../${final_zip_name}" . 
-          cd ..
-          if [ ! -f "${final_zip_name}" ]; then echo "::error::Failed to create zip package named ${final_zip_name}."; exit 1; fi
-          echo "packaged_zip=${final_zip_name}" >> $GITHUB_OUTPUT
+          name: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }} # 下载已命名的 ZIP Artifact
+          path: . # 直接下载到当前工作目录
       - name: 创建 Release 并上传刷机包
         uses: ncipollo/release-action@v1
         with:
-          artifacts: ${{ steps.package_kernel.outputs.packaged_zip }}
+          artifacts: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }} # 直接上传下载的 ZIP 文件
           tag: ${{ needs.kernel_build_core.outputs.release_tag }}
           name: ${{ needs.kernel_build_core.outputs.release_title }}
           body: |
