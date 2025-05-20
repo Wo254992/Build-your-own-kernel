@@ -205,14 +205,14 @@ jobs:
         run: |
           set -euo pipefail
           _actual_localversion_for_kernel=""
-          _artifact_naming_suffix_for_release_outputs=""
+          _artifact_naming_suffix_for_prepare_step="" # 用于 prepare_release_outputs step
           _current_date_yyyymmdd=$(date +%Y%m%d)
           _current_date_formatted_for_body=$(date +"%Y年%m月%d日")
 
           if [[ -n "$USER_PROVIDED_CUSTOM_SUFFIX" ]]; then
             _actual_localversion_for_kernel="-$USER_PROVIDED_CUSTOM_SUFFIX" 
-            _artifact_naming_suffix_for_release_outputs="$USER_PROVIDED_CUSTOM_SUFFIX" 
-            echo "版本要素: 用户自定义后缀为 '$_actual_localversion_for_kernel' (用于内核) 和 '$_artifact_naming_suffix_for_release_outputs' (用于Release文件名)"
+            _artifact_naming_suffix_for_prepare_step="$USER_PROVIDED_CUSTOM_SUFFIX" 
+            echo "版本要素: 用户自定义后缀为 '$_actual_localversion_for_kernel' (用于内核) 和 '$_artifact_naming_suffix_for_prepare_step' (用于Release文件名)"
           else
             _kernel_fixed_part=""
             if [ "$SELECTED_AV_ENV" == "android12" ] && [ "$SELECTED_KV_ENV" == "5.10" ]; then _kernel_fixed_part="-android12-9"
@@ -225,16 +225,15 @@ jobs:
             _random_hex_11=$(head /dev/urandom | LC_ALL=C tr -dc 'a-f0-9' | head -c 11 || echo "randhex")
             _random_digits_8=$(head /dev/urandom | LC_ALL=C tr -dc '0-9' | head -c 8 || echo "randdig")
             _actual_localversion_for_kernel="${_kernel_fixed_part}-gd${_random_hex_11}-ab${_random_digits_8}" 
-            _artifact_naming_suffix_for_release_outputs="-${_current_date_yyyymmdd}" 
-            echo "版本要素: 无自定义后缀。内核 LOCALVERSION 后缀: '$_actual_localversion_for_kernel', Release 文件名后缀: '$_artifact_naming_suffix_for_release_outputs'"
+            _artifact_naming_suffix_for_prepare_step="-${_current_date_yyyymmdd}" 
+            echo "版本要素: 无自定义后缀。内核 LOCALVERSION 后缀: '$_actual_localversion_for_kernel', Artifact 命名后缀: '$_artifact_naming_suffix_for_prepare_step'"
           fi
           
           echo "FINAL_KERNEL_LOCAL_VERSION=${_actual_localversion_for_kernel}" >> "$GITHUB_ENV"
-          echo "ARTIFACT_NAME_SUFFIX_PART_ENV=${_artifact_naming_suffix_for_release_outputs}" >> "$GITHUB_ENV" 
+          echo "ARTIFACT_NAME_SUFFIX_PART_ENV=${_artifact_naming_suffix_for_prepare_step}" >> "$GITHUB_ENV" 
           echo "final_kernel_local_version_for_body=${_actual_localversion_for_kernel}" >> "$GITHUB_OUTPUT"
           echo "current_build_date_formatted_for_body=${_current_date_formatted_for_body}" >> "$GITHUB_OUTPUT"
-          # 此输出用于 prepare_release_outputs step
-          echo "artifact_naming_suffix_for_prepare=${_artifact_naming_suffix_for_release_outputs}" >> "$GITHUB_OUTPUT"
+          echo "artifact_naming_suffix_for_prepare=${_artifact_naming_suffix_for_prepare_step}" >> "$GITHUB_OUTPUT"
 
 
       - name: KPM策略调整
@@ -796,8 +795,7 @@ jobs:
           _sl="${{ env.SELECTED_SUB_LEVEL }}"; 
           _suf_for_release_name="${{ env.ARTIFACT_NAME_SUFFIX_PART_ENV }}" 
           _base="SukiSUUltra"; _tit=""; _tag=""
-          # _final_local_version_for_release="${{ env.FINAL_KERNEL_LOCAL_VERSION }}" # This is already in outputs
-
+          
           if [[ "$_svn" != "NoVer" && "$_svn" =~ ^[0-9]+$ && -z "${{ github.event.inputs.custom_version_suffix }}" ]]; then
             _aname_for_release="AnyKernel3_${_base}_${_svn}_${_kv}-${_sl}${_suf_for_release_name}"
             _tit="${_base}-${_svn}"
@@ -839,20 +837,27 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends zip
+      - name: 调试 Artifact 名称
+        run: echo "需要下载的 Artifact 逻辑名称: ${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }}" # 使用 env context 访问
       - name: 下载内核刷机包 (Artifact)
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }} # *** 修正这里 ***
+          name: ${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }} # *** 修正: 使用 needs context 访问 env ***
           path: downloaded_artifact/
       - name: 准备刷机包并设置路径
         id: package_kernel
         shell: bash
         run: |
           set -euo pipefail
+          echo "查看 downloaded_artifact 内容:"
+          ls -R downloaded_artifact
           cd downloaded_artifact
+          # 使用 needs.kernel_build_core.outputs.artifact_name_for_release 来命名最终的 zip 文件
           final_zip_name="${{ needs.kernel_build_core.outputs.artifact_name_for_release }}.zip"
-          echo "Final ZIP name will be: $final_zip_name"
-          if [ -z "$(ls -A .)" ]; then echo "::error::Downloaded artifact directory (path: downloaded_artifact/) is empty. Artifact '${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }}' might not have been uploaded correctly or contained no files."; exit 1; fi
+          echo "最终 ZIP 文件名将是: $final_zip_name"
+          # 确保下载的内容是 AnyKernel3 的文件结构，而不是一个名为 INTERMEDIATE_ARTIFACT_NAME 的子目录
+          # actions/download-artifact@v4 默认会将 artifact 内容直接放到 path 指定的目录下
+          if [ -z "$(ls -A .)" ]; then echo "::error::Downloaded artifact directory (path: downloaded_artifact/) is empty. Artifact '${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }}' (expected literal name) might not have been uploaded correctly or contained no files."; exit 1; fi
           zip -r9 "../${final_zip_name}" . 
           cd ..
           if [ ! -f "${final_zip_name}" ]; then echo "::error::Failed to create zip package named ${final_zip_name}."; exit 1; fi
@@ -861,25 +866,27 @@ jobs:
         uses: ncipollo/release-action@v1
         with:
           artifacts: ${{ steps.package_kernel.outputs.packaged_zip }}
-          tag: ${{ needs.build_kernel.outputs.release_tag }}
-          name: ${{ needs.build_kernel.outputs.release_title }}
+          tag: ${{ needs.kernel_build_core.outputs.release_tag }}
+          name: ${{ needs.kernel_build_core.outputs.release_title }}
           body: |
-            自动构建的内核发行版。
+            ## 自动构建内核 (${{ needs.kernel_build_core.outputs.release_title }})
 
-            **核心信息:**
-            - 内核版本构建输入: `${{ github.event.inputs.kernel_to_build }}`
-            - SukiSU 版本 (计算): `${{ needs.build_kernel.outputs.sukisu_version_from_build_job }}`
-            - SukiSU 功能分支: `${{ github.event.inputs.kernelsu_branch }}`
-            - 自定义版本后缀 (如有): `${{ github.event.inputs.custom_version_suffix == '' && '仿官方随机生成' || format('自定义: {0}', github.event.inputs.custom_version_suffix) }}`
-            - 内核名 (LOCALVERSION): `${{ needs.build_kernel.outputs.parsed_kernel_version_output }}.${{ needs.build_kernel.outputs.parsed_sub_level_output }}${{ needs.build_kernel.outputs.final_kernel_local_version_output }}`
-            - 构建日期: `${{ needs.build_kernel.outputs.current_build_date_formatted_output }}`
+            **构建于: `${{ needs.kernel_build_core.outputs.current_build_date_formatted_output }}`**
 
-            **构建选项:**
-            - 使用ZRAM: `${{ github.event.inputs.use_zram }}`
-            - 使用KPM: `${{ needs.build_kernel.outputs.effective_kpm_setting }}` (实际生效的KPM设置)
+            ### 核心参数
+            | 参数项 | 值 |
+            |---|---|
+            | 内核版本构建输入 | `${{ github.event.inputs.kernel_to_build }}` |
+            | 内核名 (LOCALVERSION) | `${{ needs.kernel_build_core.outputs.parsed_kernel_version_output }}.${{ needs.kernel_build_core.outputs.parsed_sub_level_output }}${{ needs.kernel_build_core.outputs.final_kernel_local_version_output }}` |
+            | SukiSU 版本 (计算) | `${{ needs.kernel_build_core.outputs.sukisu_version_from_build_job }}` |
+            | SukiSU 功能分支 | `${{ github.event.inputs.kernelsu_branch }}` |
+
+            ### 构建选项
+            * **使用ZRAM**: `${{ github.event.inputs.use_zram }}`
+            * **使用KPM**: `${{ needs.kernel_build_core.outputs.effective_kpm_setting }}` (实际生效)
 
             ---
-            *SHA: `${{ github.sha }}`*
-            *构建ID: `${{ github.run_id }}`*
+            *Commit SHA: `${{ github.sha }}`*
+            *Workflow Run ID: `${{ github.run_id }}`*
           token: ${{ secrets.GITHUB_TOKEN }}
           allowUpdates: true
