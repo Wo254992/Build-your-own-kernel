@@ -90,7 +90,7 @@ on:
         default: 'true'
 
 jobs:
-  version_probe:
+  version_probe: # 与您当前工作流一致
     name: SukiSU版本探测
     runs-on: ubuntu-latest
     outputs:
@@ -132,12 +132,12 @@ jobs:
           echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
           echo "suki_version_actual=${suki_version_actual_for_output}" >> $GITHUB_OUTPUT
 
-  kernel_build_core:
+  kernel_build_core: # 与您当前工作流一致
     name: 内核构建核心 - ${{ github.event.inputs.kernel_to_build }}${{ needs.version_probe.outputs.job_name_suffix }}
     needs: version_probe
     runs-on: ubuntu-latest
     outputs:
-      final_zip_artifact_name: ${{ steps.create_and_upload_final_zip.outputs.final_zip_filename_output }} # 输出最终的ZIP文件名给 release job
+      final_zip_artifact_name: ${{ steps.create_and_upload_final_zip.outputs.final_zip_filename_output }}
       release_tag: ${{ steps.prepare_release_outputs.outputs.release_tag_name }}
       release_title: ${{ steps.prepare_release_outputs.outputs.release_title_name }}
       final_kernel_local_version_output: ${{ steps.generate_version_elements.outputs.final_kernel_local_version_for_body }}
@@ -152,10 +152,11 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
       SUKI_VERSION_NUM_FROM_PREVIOUS_JOB: ${{ needs.version_probe.outputs.sukisu_version }}
+      BAZEL_OPTIMIZATION_FLAGS: "--jobs=$(nproc) --local_ram_resources=HOST_RAM*0.8" # 与您当前工作流一致
       CCACHE_LOGFILE: /tmp/ccache.log
-      BAZEL_PROFILE_FILENAME: bazel_profile.json 
+      BAZEL_PROFILE_FILENAME: bazel_profile.json
       DEBIAN_FRONTEND: noninteractive
-      # INTERMEDIATE_ARTIFACT_NAME 不再需要，因为我们直接上传最终的 ZIP 文件作为 Artifact
+      # INTERMEDIATE_ARTIFACT_NAME 不再需要，我们将直接使用最终的 ZIP 文件名作为 Artifact 名称
 
     steps:
       - name: 参数校验
@@ -233,7 +234,6 @@ jobs:
           echo "ARTIFACT_NAME_SUFFIX_PART_ENV=${_artifact_naming_suffix_for_env}" >> "$GITHUB_ENV" 
           echo "final_kernel_local_version_for_body=${_actual_localversion_for_kernel}" >> "$GITHUB_OUTPUT"
           echo "current_build_date_formatted_for_body=${_current_date_formatted_for_body}" >> "$GITHUB_OUTPUT"
-
 
       - name: KPM策略调整
         id: kpm_settings
@@ -772,7 +772,7 @@ jobs:
           _base="SukiSUUltra"; _tit=""; _tag=""
           
           if [[ "$_svn" != "NoVer" && "$_svn" =~ ^[0-9]+$ && -z "${{ github.event.inputs.custom_version_suffix }}" ]]; then
-            _aname_for_release="AnyKernel3_${_base}_${_svn}_${_kv}-${_sl}${_suf_for_release_name}"
+            _aname_for_release_base="AnyKernel3_${_base}_${_svn}_${_kv}-${_sl}${_suf_for_release_name}"
             _tit="${_base}-${_svn}"
             _tag="${_base}-${_svn}_${_kv}-${_sl}${_suf_for_release_name}"
           else 
@@ -792,25 +792,23 @@ jobs:
                  _tit="${_base}-NoVer${_effective_suffix_for_naming}"
             fi
 
-            _aname_for_release="AnyKernel3_${_base}_${_version_indicator_for_naming}_${_kv}-${_sl}${_effective_suffix_for_naming}"
+            _aname_for_release_base="AnyKernel3_${_base}_${_version_indicator_for_naming}_${_kv}-${_sl}${_effective_suffix_for_naming}"
             _tag="${_base}-${_version_indicator_for_naming}_${_kv}-${_sl}${_effective_suffix_for_naming}"
           fi
           
-          echo "Calculated artifact_name_for_release for job output: $_aname_for_release"
-          echo "artifact_name_for_release=$(echo "$_aname_for_release" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
+          echo "artifact_name_for_release=$(echo "$_aname_for_release_base" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_tag_name=$(echo "$_tag" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g')" >> "$GITHUB_OUTPUT"
           echo "release_title_name=${_tit}" >> "$GITHUB_OUTPUT"
 
-      - name: 创建并上传最终刷机包作为Artifact
+      - name: 创建并上传最终刷机包Artifact
         id: create_and_upload_final_zip
         shell: bash
         run: |
           set -euo pipefail
-          # 使用 prepare_release_outputs 步骤计算出的 artifact_name_for_release 来命名 ZIP 文件
           FINAL_ZIP_BASE_NAME="${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}"
           FINAL_ZIP_FILENAME="${FINAL_ZIP_BASE_NAME}.zip"
           
-          echo "Final ZIP base name from prepare_release_outputs: $FINAL_ZIP_BASE_NAME"
+          echo "Final ZIP base name: $FINAL_ZIP_BASE_NAME"
           echo "Final ZIP full filename for artifact upload: $FINAL_ZIP_FILENAME"
 
           cd "${{ github.workspace }}/AnyKernel3"
@@ -825,7 +823,6 @@ jobs:
             echo "::error::Failed to create final ZIP: ${GITHUB_WORKSPACE}/${FINAL_ZIP_FILENAME}"
             exit 1
           fi
-          # 输出 ZIP 文件名，以便 create_release 作业可以引用它
           echo "final_zip_filename_output=${FINAL_ZIP_FILENAME}" >> "$GITHUB_OUTPUT"
           
       - name: 上传最终刷机包 (Artifact)
@@ -867,18 +864,17 @@ jobs:
       - name: 调试 Artifact 下载参数
         run: |
           echo "期望下载的 Artifact (已打包ZIP) 名称: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }}"
-          echo "最终 Release 文件名基础将是 (用于校验): ${{ needs.kernel_build_core.outputs.artifact_name_for_release }}" 
           echo "最终 Release 标签: ${{ needs.kernel_build_core.outputs.release_tag }}"
           echo "最终 Release 标题: ${{ needs.kernel_build_core.outputs.release_title }}"
       - name: 下载内核刷机包 (Artifact)
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }} 
-          path: . # 直接下载到当前工作目录，下载下来的就是那个 ZIP 文件
+          path: . 
       - name: 创建 Release 并上传刷机包
         uses: ncipollo/release-action@v1
         with:
-          artifacts: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }} # 直接上传下载的 ZIP 文件
+          artifacts: ${{ needs.kernel_build_core.outputs.final_zip_filename_output }} 
           tag: ${{ needs.kernel_build_core.outputs.release_tag }}
           name: ${{ needs.kernel_build_core.outputs.release_title }}
           body: |
