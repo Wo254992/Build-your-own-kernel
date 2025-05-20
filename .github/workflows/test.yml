@@ -155,7 +155,7 @@ jobs:
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json 
       DEBIAN_FRONTEND: noninteractive
-      INTERMEDIATE_ARTIFACT_NAME: "AnyKernel3_Content_For_Release" 
+      INTERMEDIATE_ARTIFACT_NAME: "AnyKernel3_Content_For_Release" # 作业间传递的固定 Artifact 名称
 
     steps:
       - name: 参数校验
@@ -374,7 +374,7 @@ jobs:
             
             _MANIFEST_BRANCH_FOR_INIT="common-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
             if [[ -n "${{ env.SELECTED_OS_PATCH_LEVEL }}" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "_" && "${{ env.SELECTED_OS_PATCH_LEVEL }}" != "X" ]]; then
-                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
+                _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
             elif [[ "${{ github.event.inputs.kernel_to_build }}" == *"_X_lts_"* || "${{ github.event.inputs.kernel_to_build }}" == *"_lts_"* ]]; then
                 _MANIFEST_BRANCH_FOR_INIT="${_MANIFEST_BRANCH_FOR_INIT}}-lts"
             fi
@@ -833,7 +833,6 @@ jobs:
       contents: write 
     runs-on: ubuntu-latest
     if: success() && github.event.inputs.upload_to_release == 'true'
-    # 不再需要在 create_release 作业中定义 INTERMEDIATE_ARTIFACT_NAME
     steps:
       - name: 安装 zip 工具
         run: |
@@ -846,7 +845,7 @@ jobs:
       - name: 下载内核刷机包 (Artifact)
         uses: actions/download-artifact@v4
         with:
-          name: "AnyKernel3_Content_For_Release" # *** 直接使用固定的字面量名称 ***
+          name: "AnyKernel3_Content_For_Release" # *** 使用固定的字面量名称 ***
           path: downloaded_artifact/
       - name: 准备刷机包并设置路径
         id: package_kernel
