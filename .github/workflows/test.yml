@@ -155,7 +155,7 @@ jobs:
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json 
       DEBIAN_FRONTEND: noninteractive
-      INTERMEDIATE_ARTIFACT_NAME: "AnyKernel3_Content_For_Release" # 作业间传递的固定 Artifact 名称
+      INTERMEDIATE_ARTIFACT_NAME: "AnyKernel3_Content_For_Release" 
 
     steps:
       - name: 参数校验
@@ -205,14 +205,14 @@ jobs:
         run: |
           set -euo pipefail
           _actual_localversion_for_kernel=""
-          _artifact_naming_suffix_for_prepare_step="" # 用于 prepare_release_outputs step
+          _artifact_naming_suffix_for_release_outputs="" 
           _current_date_yyyymmdd=$(date +%Y%m%d)
           _current_date_formatted_for_body=$(date +"%Y年%m月%d日")
 
           if [[ -n "$USER_PROVIDED_CUSTOM_SUFFIX" ]]; then
             _actual_localversion_for_kernel="-$USER_PROVIDED_CUSTOM_SUFFIX" 
-            _artifact_naming_suffix_for_prepare_step="$USER_PROVIDED_CUSTOM_SUFFIX" 
-            echo "版本要素: 用户自定义后缀为 '$_actual_localversion_for_kernel' (用于内核) 和 '$_artifact_naming_suffix_for_prepare_step' (用于Release文件名)"
+            _artifact_naming_suffix_for_release_outputs="$USER_PROVIDED_CUSTOM_SUFFIX" 
+            echo "版本要素: 用户自定义后缀为 '$_actual_localversion_for_kernel' (用于内核) 和 '$_artifact_naming_suffix_for_release_outputs' (用于Release文件名)"
           else
             _kernel_fixed_part=""
             if [ "$SELECTED_AV_ENV" == "android12" ] && [ "$SELECTED_KV_ENV" == "5.10" ]; then _kernel_fixed_part="-android12-9"
@@ -225,15 +225,15 @@ jobs:
             _random_hex_11=$(head /dev/urandom | LC_ALL=C tr -dc 'a-f0-9' | head -c 11 || echo "randhex")
             _random_digits_8=$(head /dev/urandom | LC_ALL=C tr -dc '0-9' | head -c 8 || echo "randdig")
             _actual_localversion_for_kernel="${_kernel_fixed_part}-gd${_random_hex_11}-ab${_random_digits_8}" 
-            _artifact_naming_suffix_for_prepare_step="-${_current_date_yyyymmdd}" 
-            echo "版本要素: 无自定义后缀。内核 LOCALVERSION 后缀: '$_actual_localversion_for_kernel', Artifact 命名后缀: '$_artifact_naming_suffix_for_prepare_step'"
+            _artifact_naming_suffix_for_release_outputs="-${_current_date_yyyymmdd}" 
+            echo "版本要素: 无自定义后缀。内核 LOCALVERSION 后缀: '$_actual_localversion_for_kernel', Artifact 命名后缀: '$_artifact_naming_suffix_for_release_outputs'"
           fi
           
           echo "FINAL_KERNEL_LOCAL_VERSION=${_actual_localversion_for_kernel}" >> "$GITHUB_ENV"
-          echo "ARTIFACT_NAME_SUFFIX_PART_ENV=${_artifact_naming_suffix_for_prepare_step}" >> "$GITHUB_ENV" 
+          echo "ARTIFACT_NAME_SUFFIX_PART_ENV=${_artifact_naming_suffix_for_release_outputs}" >> "$GITHUB_ENV" 
           echo "final_kernel_local_version_for_body=${_actual_localversion_for_kernel}" >> "$GITHUB_OUTPUT"
           echo "current_build_date_formatted_for_body=${_current_date_formatted_for_body}" >> "$GITHUB_OUTPUT"
-          echo "artifact_naming_suffix_for_prepare=${_artifact_naming_suffix_for_prepare_step}" >> "$GITHUB_OUTPUT"
+          echo "artifact_naming_suffix_for_prepare=${_artifact_naming_suffix_for_release_outputs}" >> "$GITHUB_OUTPUT"
 
 
       - name: KPM策略调整
@@ -573,7 +573,7 @@ jobs:
       - name: 内核功能微调
         run: |
           set -euo pipefail
-          GKI_PATH="${{ env.GKI_DEFCONFIG_PATH_ENV }}"; if [ ! -f "$GKI_PATH" ]; then echo "::error::gki_defconfig not found for SUSFS config"; exit 1; fi
+          GKI_PATH="${{ env.GKI_DEFCONFIG_PATH_ENV }}"; if [ ! -f "$GKI_PATH" ]; then echo "::error::gki_defconfig not found"; exit 1; fi
           upd_cfg() { local k="$1"; local v_param="$2"; local file="$3"; sed -i -e "/^${k}=/d" -e "/^# ${k} is not set/d" "$file"; echo "${k}=${v_param}" >> "$file"; }
           cfgs_y=( "CONFIG_KSU" "CONFIG_KSU_MANUAL_HOOK" "CONFIG_TMPFS_XATTR" "CONFIG_TMPFS_POSIX_ACL" "CONFIG_IP_NF_TARGET_TTL" "CONFIG_IP6_NF_TARGET_HL" "CONFIG_IP6_NF_MATCH_HL" "CONFIG_TCP_CONG_ADVANCED" "CONFIG_TCP_CONG_BBR" "CONFIG_NET_SCH_FQ" "CONFIG_KSU_SUSFS" "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT" "CONFIG_KSU_SUSFS_SUS_PATH" "CONFIG_KSU_SUSFS_SUS_MOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT" "CONFIG_KSU_SUSFS_SUS_KSTAT" "CONFIG_KSU_SUSFS_TRY_UMOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT" "CONFIG_KSU_SUSFS_SPOOF_UNAME" "CONFIG_KSU_SUSFS_ENABLE_LOG" "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS" "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG" "CONFIG_KSU_SUSFS_OPEN_REDIRECT" )
           cfgs_n=( "CONFIG_KSU_SUSFS_SUS_SU" "CONFIG_KSU_SUSFS_SUS_OVERLAYFS" "CONFIG_TCP_CONG_BIC" "CONFIG_TCP_CONG_WESTWOOD" "CONFIG_TCP_CONG_HTCP" )
@@ -832,17 +832,19 @@ jobs:
       contents: write 
     runs-on: ubuntu-latest
     if: success() && github.event.inputs.upload_to_release == 'true'
+    env: # 定义 INTERMEDIATE_ARTIFACT_NAME 以便在此作业中引用，或者直接使用字面量
+      INTERMEDIATE_ARTIFACT_NAME: "AnyKernel3_Content_For_Release"
     steps:
       - name: 安装 zip 工具
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends zip
       - name: 调试 Artifact 名称
-        run: echo "需要下载的 Artifact 逻辑名称: ${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }}" # 使用 env context 访问
+        run: echo "期望下载的 Artifact 固定名称: ${{ env.INTERMEDIATE_ARTIFACT_NAME }}"
       - name: 下载内核刷机包 (Artifact)
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }} # *** 修正: 使用 needs context 访问 env ***
+          name: ${{ env.INTERMEDIATE_ARTIFACT_NAME }} 
           path: downloaded_artifact/
       - name: 准备刷机包并设置路径
         id: package_kernel
@@ -852,12 +854,9 @@ jobs:
           echo "查看 downloaded_artifact 内容:"
           ls -R downloaded_artifact
           cd downloaded_artifact
-          # 使用 needs.kernel_build_core.outputs.artifact_name_for_release 来命名最终的 zip 文件
           final_zip_name="${{ needs.kernel_build_core.outputs.artifact_name_for_release }}.zip"
           echo "最终 ZIP 文件名将是: $final_zip_name"
-          # 确保下载的内容是 AnyKernel3 的文件结构，而不是一个名为 INTERMEDIATE_ARTIFACT_NAME 的子目录
-          # actions/download-artifact@v4 默认会将 artifact 内容直接放到 path 指定的目录下
-          if [ -z "$(ls -A .)" ]; then echo "::error::Downloaded artifact directory (path: downloaded_artifact/) is empty. Artifact '${{ needs.kernel_build_core.env.INTERMEDIATE_ARTIFACT_NAME }}' (expected literal name) might not have been uploaded correctly or contained no files."; exit 1; fi
+          if [ -z "$(ls -A .)" ]; then echo "::error::Downloaded artifact directory (path: downloaded_artifact/) is empty. Artifact '${{ env.INTERMEDIATE_ARTIFACT_NAME }}' might not have been uploaded correctly or contained no files."; exit 1; fi
           zip -r9 "../${final_zip_name}" . 
           cd ..
           if [ ! -f "${final_zip_name}" ]; then echo "::error::Failed to create zip package named ${final_zip_name}."; exit 1; fi
