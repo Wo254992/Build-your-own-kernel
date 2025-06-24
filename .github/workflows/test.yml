@@ -142,10 +142,10 @@ jobs:
     needs: determine_sukisu_version
     runs-on: ubuntu-latest
     outputs:
-      artifact_name: ${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}
-      release_tag: ${{ steps.prepare_release_outputs.outputs.release_tag_name }}
-      release_title: ${{ steps.prepare_release_outputs.outputs.release_title_name }}
-      stable_release_tag_for_action: ${{ steps.prepare_release_outputs.outputs.stable_release_tag_for_action }}
+      artifact_name: ${{ steps.generate_release_info.outputs.artifact_name_for_release }}
+      release_tag: ${{ steps.generate_release_info.outputs.release_tag_name }}
+      release_title: ${{ steps.generate_release_info.outputs.release_title_name }}
+      stable_release_tag_for_action: ${{ steps.generate_release_info.outputs.stable_release_tag_for_action }}
       final_kernel_local_version_output: ${{ steps.generate_suffixes.outputs.final_kernel_local_version_for_release_body }}
       current_build_date_formatted_output: ${{ steps.generate_suffixes.outputs.current_build_date_formatted_for_release_body }}
       parsed_kernel_version_output: ${{ steps.parse_kernel.outputs.parsed_kernel_version }}
@@ -737,33 +737,8 @@ jobs:
             echo "::error::Validation FAILED: '$file_out'"
             exit 1
           fi
-      - name: 上传内核刷机包 Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: |
-            ${{ (env.SUKI_VERSION_NUM != 'NoVer' && env.SUKI_VERSION_NUM != '' && env.SUKI_VERSION_NUM != '00000') &&
-                format('AnyKernel3_SukiSUUltra_{0}_{1}-{2}{3}', env.SUKI_VERSION_NUM, env.SELECTED_KERNEL_VERSION, env.SELECTED_SUB_LEVEL, env.ARTIFACT_NAME_SUFFIX_PART) ||
-                format('AnyKernel3_SukiSU_{0}_{1}-{2}{3}', 'NoVer', env.SELECTED_KERNEL_VERSION, env.SELECTED_SUB_LEVEL, env.ARTIFACT_NAME_SUFFIX_PART) }}
-          path: ${{ github.workspace }}/AnyKernel3
-          if-no-files-found: error
-      - name: 清理构建空间
-        if: always()
-        run: |
-          set -euo pipefail
-          if [ -d "/home/runner/.cache/bazel_disk_cache" ]; then rm -rf /home/runner/.cache/bazel_disk_cache || echo "::warning::Bazel disk cache removal failed."; fi
-          if [ -d "$HOME/.cache/bazel" ]; then rm -rf "$HOME/.cache/bazel" || echo "::warning::Bazel repo cache removal failed."; fi
-          ccache -s
-      - name: 上传构建日志
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ github.run_id }}
-          path: |
-            ${{ env.CCACHE_LOGFILE }}
-            ${{ github.workspace }}/${{ env.BAZEL_PROFILE_FILENAME }}
-          if-no-files-found: ignore
-      - name: 准备 Release 信息
-        id: prepare_release_outputs
+      - name: 生成发布信息和文件名
+        id: generate_release_info
         shell: bash
         run: |
           set -euo pipefail
@@ -793,6 +768,28 @@ jobs:
           echo "release_tag_name=${_tag}" >> "$GITHUB_OUTPUT"
           echo "release_title_name=${_tit}" >> "$GITHUB_OUTPUT"
           echo "stable_release_tag_for_action=${_stable_group_tag}" >> "$GITHUB_OUTPUT"
+      - name: 上传内核刷机包 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.generate_release_info.outputs.artifact_name_for_release }}
+          path: ${{ github.workspace }}/AnyKernel3
+          if-no-files-found: error
+      - name: 清理构建空间
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -d "/home/runner/.cache/bazel_disk_cache" ]; then rm -rf /home/runner/.cache/bazel_disk_cache || echo "::warning::Bazel disk cache removal failed."; fi
+          if [ -d "$HOME/.cache/bazel" ]; then rm -rf "$HOME/.cache/bazel" || echo "::warning::Bazel repo cache removal failed."; fi
+          ccache -s
+      - name: 上传构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ github.run_id }}
+          path: |
+            ${{ env.CCACHE_LOGFILE }}
+            ${{ github.workspace }}/${{ env.BAZEL_PROFILE_FILENAME }}
+          if-no-files-found: ignore
 
   create_release:
     name: 创建 GitHub Release
