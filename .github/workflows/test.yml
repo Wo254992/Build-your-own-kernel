@@ -453,58 +453,64 @@ jobs:
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         shell: bash
         run: |
+          set -euo pipefail
+          echo "Applying SUSFS patches..."
+          
+          SPECIFIC_PATCH_NAME="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}.patch"
+          GENERIC_PATCH_NAME="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
+          
+          SUSFS_REPO_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches"
+          SPECIFIC_PATCH_SRC_PATH="${SUSFS_REPO_PATH}/${SPECIFIC_PATCH_NAME}"
+          GENERIC_PATCH_SRC_PATH="${SUSFS_REPO_PATH}/${GENERIC_PATCH_NAME}"
+          
+          FINAL_PATCH_SRC_PATH=""
+          FINAL_PATCH_FILENAME=""
+          
+          if [ -f "$SPECIFIC_PATCH_SRC_PATH" ]; then
+            echo "Found specific patch file: $SPECIFIC_PATCH_NAME"
+            FINAL_PATCH_SRC_PATH="$SPECIFIC_PATCH_SRC_PATH"
+            FINAL_PATCH_FILENAME="$SPECIFIC_PATCH_NAME"
+          elif [ -f "$GENERIC_PATCH_SRC_PATH" ]; then
+            echo "::notice title=使用通用补丁::未找到精确匹配的SUSFS补丁, 将自动回退使用通用补丁: $GENERIC_PATCH_NAME 。后续日志中出现的 'offset' 信息是正常现象。"
+            FINAL_PATCH_SRC_PATH="$GENERIC_PATCH_SRC_PATH"
+            FINAL_PATCH_FILENAME="$GENERIC_PATCH_NAME"
+          else
+            echo "::error::未找到可用的SUSFS补丁文件。已尝试查找 '$SPECIFIC_PATCH_NAME' 和 '$GENERIC_PATCH_NAME'。"
+            exit 1
+          fi
+          
           mkdir -p ./common/fs && mkdir -p ./common/include/linux
-          SUSFS_PATCH_SRC_FILE_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}.patch"
-          SUSFS_PATCH_DEST_DIR_PATH="./common/"
-          if [ -f "$SUSFS_PATCH_SRC_FILE_PATH" ]; then
-            cp "$SUSFS_PATCH_SRC_FILE_PATH" "$SUSFS_PATCH_DEST_DIR_PATH" || echo "::warning::Failed to copy main patch file. Continuing..."
-          else
-            echo "::warning::Main SUSFS patch file not found: $SUSFS_PATCH_SRC_FILE_PATH. This might be expected."
-          fi
+          cp "$FINAL_PATCH_SRC_PATH" "./common/${FINAL_PATCH_FILENAME}"
+          
           SUSFS_FS_SRC_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/fs"
-          SUSFS_FS_DEST_PATH="./common/fs/"
-          if [ -d "$SUSFS_FS_SRC_PATH" ]; then
-            if [ -n "$(ls -A "$SUSFS_FS_SRC_PATH" 2>/dev/null)" ]; then
-              cp -r ${SUSFS_FS_SRC_PATH}/* "$SUSFS_FS_DEST_PATH" || echo "::warning::SUSFS fs dir copy FAILED. CONTINUING."
-            fi
+          if [ -d "$SUSFS_FS_SRC_PATH" ] && [ -n "$(ls -A "$SUSFS_FS_SRC_PATH" 2>/dev/null)" ]; then
+            cp -r ${SUSFS_FS_SRC_PATH}/* ./common/fs/ || echo "::warning::SUSFS fs dir copy FAILED. CONTINUING."
           fi
+          
           SUSFS_INCLUDE_SRC_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/include/linux"
-          SUSFS_INCLUDE_DEST_PATH="./common/include/linux/"
-          if [ -d "$SUSFS_INCLUDE_SRC_PATH" ]; then
-            if [ -n "$(ls -A "$SUSFS_INCLUDE_SRC_PATH" 2>/dev/null)" ]; then
-              cp -r ${SUSFS_INCLUDE_SRC_PATH}/* "$SUSFS_INCLUDE_DEST_PATH" || echo "::warning::SUSFS include/linux copy FAILED. CONTINUING."
-            fi
+          if [ -d "$SUSFS_INCLUDE_SRC_PATH" ] && [ -n "$(ls -A "$SUSFS_INCLUDE_SRC_PATH" 2>/dev/null)" ]; then
+            cp -r ${SUSFS_INCLUDE_SRC_PATH}/* ./common/include/linux/ || echo "::warning::SUSFS include/linux copy FAILED. CONTINUING."
           fi
-          current_dir_before_cd_common=$(pwd)
-          if ! cd ./common; then
-            echo "::error::Failed to cd into ./common for patching."
+          
+          cd ./common
+          if patch -p1 --fuzz=3 < "./${FINAL_PATCH_FILENAME}"; then
+             echo "SUSFS patch applied successfully."
           else
-            SUSFS_PATCH_FILENAME_IN_COMMON="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}.patch"
-            if [ -f "./${SUSFS_PATCH_FILENAME_IN_COMMON}" ]; then
-              patch_output_file=$(mktemp)
-              if patch -p1 --fuzz=3 < "./${SUSFS_PATCH_FILENAME_IN_COMMON}" > "$patch_output_file" 2>&1; then
-                echo "Main SUSFS patch applied (exit code 0 - may include fuzz)."
-              else
-                patch_exit_code=$?
-                echo "::warning::Main SUSFS patch command exited with code $patch_exit_code (1:rejections, 2:trouble). CONTINUING."
-              fi
-              cat "$patch_output_file" || echo "No patch output for main patch."
-              rm -f "$patch_output_file"
+             echo "::error::SUSFS patching failed with exit code $?."
+             exit 1
+          fi
+          cd - >/dev/null
+          
+          FORMATTED_BRANCH_FOR_FIX_COMPARE="${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
+          if [[ "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-08" || "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-09" ]]; then
+            cd ./common
+            curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/fix/fix6.6.patch -o fix6.6.patch
+            if patch -p1 < fix6.6.patch; then
+               echo "6.6 fix patch applied successfully."
+            else
+               echo "::warning::6.6 fix patch failed with exit code $?. CONTINUING."
             fi
-            FORMATTED_BRANCH_FOR_FIX_COMPARE="${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
-            if [[ "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-08" || "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-09" ]]; then
-              curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/fix/fix6.6.patch -o fix6.6.patch
-              patch_output_file_66=$(mktemp)
-              if patch -p1 < fix6.6.patch > "$patch_output_file_66" 2>&1; then
-                echo "6.6 fix patch applied (exit code 0)."
-              else
-                patch_exit_code_66=$?
-                echo "::warning::6.6 fix patch command exited with code $patch_exit_code_66. CONTINUING."
-              fi
-              cat "$patch_output_file_66" || echo "No patch output for 6.6 fix."
-              rm -f "$patch_output_file_66"
-            fi
-            cd "$current_dir_before_cd_common" || echo "::warning::Failed to cd back from ./common."
+            cd - >/dev/null
           fi
       - name: 应用内核补丁
         shell: bash
