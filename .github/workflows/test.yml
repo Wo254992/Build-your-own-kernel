@@ -90,56 +90,12 @@ on:
         default: 'true'
 
 jobs:
-  determine_sukisu_version:
-    name: 获取SukiSU版本
-    runs-on: ubuntu-latest
-    outputs:
-      job_name_suffix: ${{ steps.calculate_version.outputs.job_suffix }}
-      sukisu_version: ${{ steps.calculate_version.outputs.suki_version_actual }}
-    steps:
-      - name: 安装Git
-        run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends git
-      - name: 计算SukiSU版本号 (最终修正)
-        id: calculate_version
-        shell: bash
-        run: |
-          set -euo pipefail
-          suki_version_actual_for_output="获取失败"
-          job_suffix_text=""
-          SUKI_REPO_URL="https://github.com/ShirkNeko/SukiSU-Ultra.git"
-          CLONE_BRANCH="main"
-          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
-            CLONE_BRANCH="dev"
-          fi
-          echo "Attempting to clone SukiSU from $SUKI_REPO_URL branch $CLONE_BRANCH..."
-          if git clone --branch "$CLONE_BRANCH" --single-branch --depth=100 "$SUKI_REPO_URL" SukiSU_temp_for_version; then
-            cd SukiSU_temp_for_version
-            git fetch --unshallow || echo "Unshallow failed, proceeding anyway."
-            release_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "notag")
-            commit_hash=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
-            branch_name=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "nobranch")
-            if [[ "$release_tag" != "notag" && "$commit_hash" != "nohash" && "$branch_name" != "nobranch" ]]; then
-              suki_version_actual_for_output="${release_tag}-${commit_hash}@${branch_name}"
-              job_suffix_text=" (SukiSU ${suki_version_actual_for_output})"
-            else
-              suki_version_actual_for_output="计算错误"
-              job_suffix_text=" (SukiSU - 版本计算失败)"
-              echo "::warning::Failed to calculate SukiSU version. Tag: $release_tag, Hash: $commit_hash, Branch: $branch_name"
-            fi
-            cd .. && rm -rf SukiSU_temp_for_version
-          else
-            suki_version_actual_for_output="克隆错误"
-            job_suffix_text=" (SukiSU - 克隆失败)"
-            echo "::error::Failed to clone SukiSU repository."
-          fi
-          echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
-          echo "suki_version_actual=${suki_version_actual_for_output}" >> $GITHUB_OUTPUT
+  # 修正：删除了整个 'determine_sukisu_version' job，以从根本上解决版本信息不一致的问题。
 
   build_kernel:
-    name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}${{ needs.determine_sukisu_version.outputs.job_name_suffix }}
-    needs: determine_sukisu_version
+    # 修正：简化了 Job 名称，因为动态版本信息现在在本 Job 内部生成，无法用于初始化名称。
+    name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}
+    # 修正：移除了对已删除 job 的依赖
     runs-on: ubuntu-latest
     outputs:
       artifact_name: ${{ steps.generate_release_info.outputs.artifact_name_for_release }}
@@ -150,14 +106,15 @@ jobs:
       current_build_date_formatted_output: ${{ steps.generate_suffixes.outputs.current_build_date_formatted_for_release_body }}
       parsed_kernel_version_output: ${{ steps.parse_kernel.outputs.parsed_kernel_version }}
       parsed_sub_level_output: ${{ steps.parse_kernel.outputs.parsed_sub_level }}
-      sukisu_version_from_build_job: ${{ needs.determine_sukisu_version.outputs.sukisu_version }}
+      # 修正：将从源码中提取的真实版本号作为 output，供后续 create_release job 使用
+      sukisu_version_from_source: ${{ steps.extract_and_set_version.outputs.real_suki_version }}
       gki_defconfig_path_output: ${{ steps.set_core_paths.outputs.gki_defconfig_path_output }}
       effective_kpm_setting: ${{ steps.kpm_settings.outputs.effective_kpm_value }}
     env:
       CCACHE_COMPILERCHECK: '%compiler% -dumpmachine; %compiler% -dumpversion'
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
-      SUKI_VERSION_NUM_FROM_PREVIOUS_JOB: ${{ needs.determine_sukisu_version.outputs.sukisu_version }}
+      # 修正：删除了 SUKI_VERSION_NUM_FROM_PREVIOUS_JOB 环境变量
       BAZEL_OPTIMIZATION_FLAGS: "--jobs=$(nproc) --local_ram_resources=HOST_RAM*0.8"
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json
@@ -398,25 +355,63 @@ jobs:
         run: |
           set -euo pipefail
           cd "${{ env.KERNEL_SRC_ROOT }}"
+          
+          # 修正：动态选择 setup.sh 的下载地址
+          SETUP_SCRIPT_URL="https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh"
+          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
+            SETUP_SCRIPT_URL="https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/dev/kernel/setup.sh"
+            echo "Using DEV setup script from: $SETUP_SCRIPT_URL"
+          else
+            echo "Using STABLE setup script from: $SETUP_SCRIPT_URL"
+          fi
+          
           echo "Integrating SukiSU with args: '${{ env.KSU_BRANCH_ARG }}'"
           if [[ -n "${{ env.KSU_BRANCH_ARG }}" ]]; then
-            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- ${{ env.KSU_BRANCH_ARG }}
+            curl -LSs "$SETUP_SCRIPT_URL" | bash -s -- ${{ env.KSU_BRANCH_ARG }}
           else
-            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash
+            curl -LSs "$SETUP_SCRIPT_URL" | bash
           fi
           echo "SukiSU integration script executed."
-      - name: 设置SukiSU版本号
+          
+      # 修正：全新步骤。在集成后，从真实源码中提取版本号，确保信息准确。
+      - name: 提取并设置SukiSU真实版本
+        id: extract_and_set_version
         shell: bash
         run: |
           set -euo pipefail
-          final_suki_version_num_for_env="${{ needs.determine_sukisu_version.outputs.sukisu_version }}"
-          if [[ "$final_suki_version_num_for_env" != "获取失败" && "$final_suki_version_num_for_env" != "计算错误" && "$final_suki_version_num_for_env" != "克隆错误" ]]; then
-            echo "SUKI_VERSION_NUM=$final_suki_version_num_for_env" >> $GITHUB_ENV
-            echo "SukiSU version number set to: $final_suki_version_num_for_env"
+          # 假设 setup.sh 会将 SukiSU 克隆到内核源码根目录的 SukiSU 文件夹下
+          SUKI_SRC_PATH="${{ env.KERNEL_SRC_ROOT }}/SukiSU"
+          suki_version_actual="获取失败"
+          
+          if [ -d "$SUKI_SRC_PATH/.git" ]; then
+            cd "$SUKI_SRC_PATH"
+            # 确保即使是浅克隆也能获取到 tag 信息
+            git fetch --unshallow --tags >/dev/null 2>&1 || echo "Unshallow failed or not a shallow clone, proceeding."
+            
+            release_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "notag")
+            commit_hash=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
+            branch_name=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "nobranch")
+            
+            if [[ "$release_tag" != "notag" && "$commit_hash" != "nohash" ]]; then
+              suki_version_actual="${release_tag}-${commit_hash}@${branch_name}"
+            else
+              suki_version_actual="计算错误"
+              echo "::warning::Failed to calculate real SukiSU version. Tag: $release_tag, Hash: $commit_hash, Branch: $branch_name"
+            fi
+            cd - >/dev/null
           else
-            echo "SUKI_VERSION_NUM=NoVer" >> $GITHUB_ENV
-            echo "::warning::Invalid SukiSU version ('$final_suki_version_num_for_env'). Using 'NoVer'."
+            suki_version_actual="源码目录不存在"
+            echo "::error::SukiSU source directory not found at ${SUKI_SRC_PATH}. Cannot extract version."
           fi
+          
+          echo "Real SukiSU version extracted from source: ${suki_version_actual}"
+          echo "real_suki_version=${suki_version_actual}" >> "$GITHUB_OUTPUT"
+          
+          # 将提取到的真实版本号设置到环境变量，供后续步骤使用
+          echo "SUKI_VERSION_NUM=${suki_version_actual}" >> "$GITHUB_ENV"
+
+      # 修正：删除了旧的 '设置SukiSU版本号' 步骤，其功能已合并到上面的新步骤中。
+
       - name: 应用SUSFS补丁
         working-directory: ${{ env.KERNEL_SRC_ROOT }} 
         shell: bash
@@ -742,6 +737,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # 修正：使用从源码中提取的真实版本号
           _svn="${{ env.SUKI_VERSION_NUM }}"
           _kv="${{ env.SELECTED_KERNEL_VERSION }}"
           _sl="${{ env.SELECTED_SUB_LEVEL }}"
@@ -751,7 +747,7 @@ jobs:
           _tit=""
           _tag=""
           _stable_group_tag=""
-          if [[ "$_svn" != "NoVer" && "$_svn" != "" ]]; then
+          if [[ "$_svn" != "NoVer" && "$_svn" != "" && "$_svn" != "获取失败" && "$_svn" != "计算错误" && "$_svn" != "源码目录不存在" ]]; then
             _sanitized_svn=$(echo "$_svn" | sed 's/[^a-zA-Z0-9._@-]/_/g')
             _stable_group_tag="${_base}-${_sanitized_svn}"
             _tit="${_base} ${_svn}"
@@ -831,7 +827,8 @@ jobs:
 
             --------------------------------------------------
             **🔥 主要信息 🔥**
-            * **SukiSU 版本:** `${{ needs.build_kernel.outputs.sukisu_version_from_build_job }}`
+            # 修正：使用从 build_kernel job 传递过来的、从源码中提取的真实 SukiSU 版本号
+            * **SukiSU 版本:** `${{ needs.build_kernel.outputs.sukisu_version_from_source }}`
             * **基于内核:** `${{ github.event.inputs.kernel_to_build }}`
             * **功能分支:** `${{ github.event.inputs.kernelsu_branch }}`
             --------------------------------------------------
