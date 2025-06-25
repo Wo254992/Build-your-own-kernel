@@ -749,7 +749,7 @@ jobs:
           _tag=""
           _stable_group_tag=""
           if [[ "$_svn" != "NoVer" && "$_svn" != "" ]]; then
-            _sanitized_svn=$(echo "$_svn" | sed 's/[^a-zA-Z0-9._@-]/_/g')
+            _sanitized_svn=$(echo "$_svn" | sed 's/@/_at_/g' | sed 's/[^a-zA-Z0-9._-]/_/g')
             _stable_group_tag="${_base}-${_sanitized_svn}"
             _tit="${_base} ${_svn}"
             _aname="AnyKernel3_${_base}_${_sanitized_svn}_${_kv}-${_sl}${_suf}"
