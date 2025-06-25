@@ -90,12 +90,60 @@ on:
         default: 'true'
 
 jobs:
-  # 修正：删除了整个 'determine_sukisu_version' job，以从根本上解决版本信息不一致的问题。
+  precheck_sukisu_version:
+    name: 预检查SukiSU版本
+    runs-on: ubuntu-latest
+    outputs:
+      job_name_suffix: ${{ steps.calculate_version.outputs.job_suffix }}
+      expected_sukisu_version: ${{ steps.calculate_version.outputs.suki_version_actual }}
+    steps:
+      - name: 安装Git
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends git
+      - name: 计算SukiSU预期版本号
+        id: calculate_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          suki_version_actual_for_output="获取失败"
+          job_suffix_text=""
+          SUKI_REPO_URL="https://github.com/ShirkNeko/SukiSU-Ultra.git"
+          
+          CLONE_BRANCH="main"
+          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
+            CLONE_BRANCH="dev"
+          fi
+          
+          echo "Attempting to clone SukiSU from $SUKI_REPO_URL branch $CLONE_BRANCH for pre-check..."
+          if git clone --branch "$CLONE_BRANCH" --single-branch --depth=100 "$SUKI_REPO_URL" SukiSU_temp_for_version; then
+            cd SukiSU_temp_for_version
+            git fetch --unshallow >/dev/null 2>&1 || echo "Unshallow failed, proceeding anyway."
+            release_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "notag")
+            commit_hash=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
+            branch_name=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "nobranch")
+            
+            if [[ "$release_tag" != "notag" && "$commit_hash" != "nohash" ]]; then
+              suki_version_actual_for_output="${release_tag}-${commit_hash}@${branch_name}"
+              job_suffix_text=" (预期SukiSU ${suki_version_actual_for_output})"
+            else
+              suki_version_actual_for_output="计算错误"
+              job_suffix_text=" (SukiSU - 版本预计算失败)"
+              echo "::warning::Failed to pre-calculate SukiSU version."
+            fi
+            cd .. && rm -rf SukiSU_temp_for_version
+          else
+            suki_version_actual_for_output="克隆错误"
+            job_suffix_text=" (SukiSU - 预克隆失败)"
+            echo "::error::Failed to clone SukiSU repository for pre-check."
+          fi
+          
+          echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
+          echo "suki_version_actual=${suki_version_actual_for_output}" >> $GITHUB_OUTPUT
 
   build_kernel:
-    # 修正：简化了 Job 名称，因为动态版本信息现在在本 Job 内部生成，无法用于初始化名称。
-    name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}
-    # 修正：移除了对已删除 job 的依赖
+    name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}${{ needs.precheck_sukisu_version.outputs.job_name_suffix }}
+    needs: precheck_sukisu_version
     runs-on: ubuntu-latest
     outputs:
       artifact_name: ${{ steps.generate_release_info.outputs.artifact_name_for_release }}
@@ -106,15 +154,14 @@ jobs:
       current_build_date_formatted_output: ${{ steps.generate_suffixes.outputs.current_build_date_formatted_for_release_body }}
       parsed_kernel_version_output: ${{ steps.parse_kernel.outputs.parsed_kernel_version }}
       parsed_sub_level_output: ${{ steps.parse_kernel.outputs.parsed_sub_level }}
-      # 修正：将从源码中提取的真实版本号作为 output，供后续 create_release job 使用
-      sukisu_version_from_source: ${{ steps.extract_and_set_version.outputs.real_suki_version }}
+      sukisu_version_from_source: ${{ steps.verify_version.outputs.final_suki_version }}
       gki_defconfig_path_output: ${{ steps.set_core_paths.outputs.gki_defconfig_path_output }}
       effective_kpm_setting: ${{ steps.kpm_settings.outputs.effective_kpm_value }}
     env:
       CCACHE_COMPILERCHECK: '%compiler% -dumpmachine; %compiler% -dumpversion'
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
-      # 修正：删除了 SUKI_VERSION_NUM_FROM_PREVIOUS_JOB 环境变量
+      EXPECTED_SUKI_VERSION: ${{ needs.precheck_sukisu_version.outputs.expected_sukisu_version }}
       BAZEL_OPTIMIZATION_FLAGS: "--jobs=$(nproc) --local_ram_resources=HOST_RAM*0.8"
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json
@@ -142,7 +189,6 @@ jobs:
           echo "SELECTED_REVISION=$rev" >> $GITHUB_ENV
           echo "parsed_kernel_version=$kv" >> $GITHUB_OUTPUT
           echo "parsed_sub_level=$sl" >> $GITHUB_OUTPUT
-          echo "Parsed kernel parameters: AV=$av, KV=$kv, SL=$sl, OPL=$opl, REV=$rev"
       - name: 设置核心路径
         id: set_core_paths
         run: |
@@ -154,7 +200,6 @@ jobs:
           GKI_DEFCONFIG_FILE_PATH_VALUE="${KERNEL_SOURCE_DIRECTORY_VALUE}/common/arch/arm64/configs/gki_defconfig"
           echo "GKI_DEFCONFIG_PATH_ENV=${GKI_DEFCONFIG_FILE_PATH_VALUE}" >> $GITHUB_ENV
           echo "gki_defconfig_path_output=${GKI_DEFCONFIG_FILE_PATH_VALUE}" >> $GITHUB_OUTPUT
-          echo "Set KERNEL_SRC_ROOT env var to: ${KERNEL_SOURCE_DIRECTORY_VALUE}"
       - name: 生成版本后缀和日期
         id: generate_suffixes
         env:
@@ -170,7 +215,6 @@ jobs:
           if [[ -n "$USER_PROVIDED_SUFFIX" ]]; then
             final_kernel_local_version="$USER_PROVIDED_SUFFIX"
             artifact_name_suffix_part="$USER_PROVIDED_SUFFIX"
-            echo "Using user-provided suffix: $final_kernel_local_version"
           else
             kernel_fixed_part_for_localversion=""
             if [ "$SELECTED_AV_ENV" == "android12" ] && [ "$SELECTED_KV_ENV" == "5.10" ]; then kernel_fixed_part_for_localversion="-android12-9"
@@ -184,7 +228,6 @@ jobs:
             random_digits_8=$(head /dev/urandom | LC_ALL=C tr -dc '0-9' | head -c 8 || echo "randdig")
             final_kernel_local_version="${kernel_fixed_part_for_localversion}-gd${random_hex_11}-ab${random_digits_8}"
             artifact_name_suffix_part="-${current_date_yyyymmdd}"
-            echo "Generated pseudo-official suffix: $final_kernel_local_version"
           fi
           echo "FINAL_KERNEL_LOCAL_VERSION=${final_kernel_local_version}" >> "$GITHUB_ENV"
           echo "ARTIFACT_NAME_SUFFIX_PART=${artifact_name_suffix_part}" >> "$GITHUB_ENV"
@@ -197,10 +240,8 @@ jobs:
           EFFECTIVE_KPM_VALUE=""
           if [[ "${{ env.SELECTED_ANDROID_VERSION }}" == "android15" && "${{ env.SELECTED_KERNEL_VERSION }}" == "6.6" ]]; then
             EFFECTIVE_KPM_VALUE="false"
-            echo "KPM is forced to 'false' for Android 15 with Kernel 6.6."
           else
             EFFECTIVE_KPM_VALUE="${{ github.event.inputs.use_kpm }}"
-            echo "KPM setting based on user input: $EFFECTIVE_KPM_VALUE"
           fi
           echo "EFFECTIVE_USE_KPM=${EFFECTIVE_KPM_VALUE}" >> $GITHUB_ENV
           echo "effective_kpm_value=${EFFECTIVE_KPM_VALUE}" >> $GITHUB_OUTPUT
@@ -227,7 +268,6 @@ jobs:
           ccache --set-config=compression=true
           if ccache --version | grep -q 'Zstd'; then
             ccache --set-config=compression_type=zstd
-            echo "ccache: Zstd compression enabled."
           fi
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
           ccache -s
@@ -254,7 +294,6 @@ jobs:
           AOSP_MIRROR=https://android.googlesource.com
           BUILD_TOOLS_BRANCH=main-kernel-build-2024
           MKBOOTIMG_BRANCH=main
-          echo "Downloading prebuilt toolchain..."
           git clone "$AOSP_MIRROR/kernel/prebuilts/build-tools" -b "$BUILD_TOOLS_BRANCH" --depth 1 kernel-build-tools
           git clone "$AOSP_MIRROR/platform/system/tools/mkbootimg" -b "$MKBOOTIMG_BRANCH" --depth 1 mkbootimg
       - name: 设置工具链环境变量
@@ -290,10 +329,8 @@ jobs:
           ANYKERNEL_BRANCH="gki-2.0"
           SUSFS_BRANCH_SPECIFIC="gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
           SUSFS_BRANCH_FALLBACK="main"
-          echo "Cloning dependency repositories..."
           git clone https://github.com/WildPlusKernel/AnyKernel3.git -b "$ANYKERNEL_BRANCH" AnyKernel3
           if ! git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH_SPECIFIC" susfs4ksu; then
-            echo "Failed to clone susfs4ksu with branch $SUSFS_BRANCH_SPECIFIC, trying fallback: $SUSFS_BRANCH_FALLBACK"
             git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH_FALLBACK" susfs4ksu
           fi
           git clone https://github.com/WildPlusKernel/kernel_patches.git kernel_patches
@@ -316,7 +353,6 @@ jobs:
             else
               _MANIFEST_BRANCH="${_MANIFEST_BRANCH_BASE}"
             fi
-            echo "Using manifest branch: $_MANIFEST_BRANCH"
             ${{ env.REPO }} init --depth=1 -u https://android.googlesource.com/kernel/manifest -b $_MANIFEST_BRANCH --repo-rev=v2.16
             DEFAULT_MANIFEST_PATH=".repo/manifests/default.xml"
             if [ ! -f "$DEFAULT_MANIFEST_PATH" ] && [ -f .repo/manifest.xml ]; then
@@ -331,138 +367,114 @@ jobs:
             fi
             REMOTE_COMMON_BRANCH_STATUS=$(git ls-remote https://android.googlesource.com/kernel/common "$COMMON_PROJECT_REVISION_IN_MANIFEST")
             if echo "$REMOTE_COMMON_BRANCH_STATUS" | grep -q "refs/heads/deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST"; then
-              echo "Adjusting manifest for deprecated common branch: $COMMON_PROJECT_REVISION_IN_MANIFEST"
               sed -i "/project path=\"common\"/s|revision=\"$COMMON_PROJECT_REVISION_IN_MANIFEST\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST\"|" "$DEFAULT_MANIFEST_PATH" || \
               sed -i "/project path=\"kernel\/common\"/s|revision=\"$COMMON_PROJECT_REVISION_IN_MANIFEST\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST\"|" "$DEFAULT_MANIFEST_PATH"
             fi
             ${{ env.REPO }} --trace sync -c -j$(nproc --all) --no-tags --fail-fast --current-branch
-      - name: 设置SukiSU分支参数
-        run: |
-          set -euo pipefail
-          KSU_SETUP_BRANCH_ARG=""
-          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Stable" ]]; then
-            KSU_SETUP_BRANCH_ARG="" 
-            echo "SukiSU branch: Stable (setup.sh default)"
-          elif [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
-            KSU_SETUP_BRANCH_ARG="susfs-dev" 
-            echo "SukiSU branch: Dev (requesting 'susfs-dev' branch directly)"
-          elif [[ "${{ github.event.inputs.kernelsu_branch }}" == "Other" ]]; then
-            KSU_SETUP_BRANCH_ARG=""
-            echo "SukiSU branch: Other (setup.sh default)"
-          fi
-          echo "KSU_BRANCH_ARG=${KSU_SETUP_BRANCH_ARG}" >> $GITHUB_ENV
-      - name: 集成SukiSU
+      - name: 手动克隆并集成SukiSU
         run: |
           set -euo pipefail
           cd "${{ env.KERNEL_SRC_ROOT }}"
-          
-          # 修正：动态选择 setup.sh 的下载地址
-          SETUP_SCRIPT_URL="https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh"
+          CLONE_BRANCH="main"
           if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
-            SETUP_SCRIPT_URL="https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/dev/kernel/setup.sh"
-            echo "Using DEV setup script from: $SETUP_SCRIPT_URL"
-          else
-            echo "Using STABLE setup script from: $SETUP_SCRIPT_URL"
+            CLONE_BRANCH="dev"
           fi
           
-          echo "Integrating SukiSU with args: '${{ env.KSU_BRANCH_ARG }}'"
-          if [[ -n "${{ env.KSU_BRANCH_ARG }}" ]]; then
-            curl -LSs "$SETUP_SCRIPT_URL" | bash -s -- ${{ env.KSU_BRANCH_ARG }}
-          else
-            curl -LSs "$SETUP_SCRIPT_URL" | bash
-          fi
-          echo "SukiSU integration script executed."
+          echo "Manually cloning SukiSU branch: $CLONE_BRANCH"
+          git clone --depth=1 --branch "$CLONE_BRANCH" https://github.com/ShirkNeko/SukiSU-Ultra.git SukiSU
           
-      # 修正：全新步骤。在集成后，从真实源码中提取版本号，确保信息准确。
-      - name: 提取并设置SukiSU真实版本
-        id: extract_and_set_version
+          KCONFIG_PATH="common/Kconfig"
+          if [ -f "$KCONFIG_PATH" ]; then
+            if ! grep -q 'source "SukiSU/Kconfig"' "$KCONFIG_PATH"; then
+              echo 'source "SukiSU/Kconfig"' >> "$KCONFIG_PATH"
+              echo "SukiSU Kconfig injected into $KCONFIG_PATH"
+            fi
+          else
+            echo "::error::Kernel Kconfig at $KCONFIG_PATH not found!"
+            exit 1
+          fi
+          
+          MAKEFILE_PATH="common/Makefile"
+          if [ -f "$MAKEFILE_PATH" ]; then
+            if ! grep -q 'obj-y += SukiSU/' "$MAKEFILE_PATH"; then
+              echo -e '\nobj-y += SukiSU/' >> "$MAKEFILE_PATH"
+              echo "SukiSU Makefile entry injected into $MAKEFILE_PATH"
+            fi
+          else
+             echo "::error::Kernel Makefile at $MAKEFILE_PATH not found!"
+             exit 1
+          fi
+      - name: 提取并验证SukiSU真实版本
+        id: verify_version
         shell: bash
         run: |
           set -euo pipefail
-          # 假设 setup.sh 会将 SukiSU 克隆到内核源码根目录的 SukiSU 文件夹下
           SUKI_SRC_PATH="${{ env.KERNEL_SRC_ROOT }}/SukiSU"
-          suki_version_actual="获取失败"
+          actual_suki_version="获取失败"
           
           if [ -d "$SUKI_SRC_PATH/.git" ]; then
             cd "$SUKI_SRC_PATH"
-            # 确保即使是浅克隆也能获取到 tag 信息
-            git fetch --unshallow --tags >/dev/null 2>&1 || echo "Unshallow failed or not a shallow clone, proceeding."
+            git fetch --unshallow --tags >/dev/null 2>&1 || echo "Unshallow failed, proceeding anyway."
             
             release_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "notag")
             commit_hash=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
             branch_name=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "nobranch")
             
             if [[ "$release_tag" != "notag" && "$commit_hash" != "nohash" ]]; then
-              suki_version_actual="${release_tag}-${commit_hash}@${branch_name}"
+              actual_suki_version="${release_tag}-${commit_hash}@${branch_name}"
             else
-              suki_version_actual="计算错误"
-              echo "::warning::Failed to calculate real SukiSU version. Tag: $release_tag, Hash: $commit_hash, Branch: $branch_name"
+              actual_suki_version="计算错误"
             fi
             cd - >/dev/null
           else
-            suki_version_actual="源码目录不存在"
-            echo "::error::SukiSU source directory not found at ${SUKI_SRC_PATH}. Cannot extract version."
+            actual_suki_version="源码目录不存在"
           fi
           
-          echo "Real SukiSU version extracted from source: ${suki_version_actual}"
-          echo "real_suki_version=${suki_version_actual}" >> "$GITHUB_OUTPUT"
+          echo "Expected SukiSU Version (from pre-check): ${{ env.EXPECTED_SUKI_VERSION }}"
+          echo "Actual SukiSU Version (from integrated source): $actual_suki_version"
           
-          # 将提取到的真实版本号设置到环境变量，供后续步骤使用
-          echo "SUKI_VERSION_NUM=${suki_version_actual}" >> "$GITHUB_ENV"
-
-      # 修正：删除了旧的 '设置SukiSU版本号' 步骤，其功能已合并到上面的新步骤中。
-
+          if [[ "${{ env.EXPECTED_SUKI_VERSION }}" != "$actual_suki_version" ]]; then
+            echo "::warning title=SukiSU版本不匹配::预检查的版本 ('${{ env.EXPECTED_SUKI_VERSION }}') 与手动集成的版本 ('$actual_suki_version') 不一致。这可能是由于分支上游发生了变更。最终将使用实际集成的版本。"
+          else
+            echo "SukiSU version check passed. Expected and actual versions match."
+          fi
+          
+          echo "final_suki_version=${actual_suki_version}" >> "$GITHUB_OUTPUT"
+          echo "SUKI_VERSION_NUM=${actual_suki_version}" >> "$GITHUB_ENV"
       - name: 应用SUSFS补丁
-        working-directory: ${{ env.KERNEL_SRC_ROOT }} 
+        working-directory: ${{ env.KERNEL_SRC_ROOT }}
         shell: bash
         run: |
           echo "[SUSFS Diag] Applying SUSFS patches (diagnostic mode)..."
           mkdir -p ./common/fs && mkdir -p ./common/include/linux
-
           SUSFS_PATCH_SRC_FILE_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
           SUSFS_PATCH_DEST_DIR_PATH="./common/"
           if [ -f "$SUSFS_PATCH_SRC_FILE_PATH" ]; then
-            echo "[SUSFS Diag] Copying SUSFS patch file: $SUSFS_PATCH_SRC_FILE_PATH to $SUSFS_PATCH_DEST_DIR_PATH"
             cp "$SUSFS_PATCH_SRC_FILE_PATH" "$SUSFS_PATCH_DEST_DIR_PATH" || echo "::warning::[SUSFS Diag] Failed to copy main patch file. Continuing..."
           else
             echo "::warning::[SUSFS Diag] Main SUSFS patch file not found: $SUSFS_PATCH_SRC_FILE_PATH. This might be expected."
           fi
-
           SUSFS_FS_SRC_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/fs"
           SUSFS_FS_DEST_PATH="./common/fs/"
           if [ -d "$SUSFS_FS_SRC_PATH" ]; then
             if [ -n "$(ls -A "$SUSFS_FS_SRC_PATH" 2>/dev/null)" ]; then
-              echo "[SUSFS Diag] Copying SUSFS fs dir contents: $SUSFS_FS_SRC_PATH to $SUSFS_FS_DEST_PATH"
               cp -r ${SUSFS_FS_SRC_PATH}/* "$SUSFS_FS_DEST_PATH" || echo "::warning::[SUSFS Diag] SUSFS fs dir copy FAILED. CONTINUING."
-            else
-              echo "[SUSFS Diag] SUSFS source fs directory is empty: $SUSFS_FS_SRC_PATH"
             fi
-          else
-            echo "::warning::[SUSFS Diag] SUSFS source fs directory not found: $SUSFS_FS_SRC_PATH."
           fi
-
           SUSFS_INCLUDE_SRC_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/include/linux"
           SUSFS_INCLUDE_DEST_PATH="./common/include/linux/"
           if [ -d "$SUSFS_INCLUDE_SRC_PATH" ]; then
             if [ -n "$(ls -A "$SUSFS_INCLUDE_SRC_PATH" 2>/dev/null)" ]; then
-              echo "[SUSFS Diag] Copying SUSFS include/linux contents: $SUSFS_INCLUDE_SRC_PATH to $SUSFS_INCLUDE_DEST_PATH"
               cp -r ${SUSFS_INCLUDE_SRC_PATH}/* "$SUSFS_INCLUDE_DEST_PATH" || echo "::warning::[SUSFS Diag] SUSFS include/linux copy FAILED. CONTINUING."
-            else
-              echo "[SUSFS Diag] SUSFS source include/linux directory is empty: $SUSFS_INCLUDE_SRC_PATH"
             fi
-          else
-            echo "::warning::[SUSFS Diag] SUSFS source include/linux directory not found: $SUSFS_INCLUDE_SRC_PATH."
           fi
-
           current_dir_before_cd_common=$(pwd)
           if ! cd ./common; then
             echo "::error::[SUSFS Diag] Failed to cd into ./common for patching."
           else
             SUSFS_PATCH_FILENAME_IN_COMMON="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
             if [ -f "./${SUSFS_PATCH_FILENAME_IN_COMMON}" ]; then
-              echo "[SUSFS Diag] Attempting to apply patch: ./${SUSFS_PATCH_FILENAME_IN_COMMON} (in $(pwd))"
               patch_output_file=$(mktemp)
-              echo "--- [SUSFS Diag] Main Patch Output (Command: patch -p1 --fuzz=3 < ./${SUSFS_PATCH_FILENAME_IN_COMMON}) ---"
               if patch -p1 --fuzz=3 < "./${SUSFS_PATCH_FILENAME_IN_COMMON}" > "$patch_output_file" 2>&1; then
                 echo "[SUSFS Diag] Main SUSFS patch applied (exit code 0 - may include fuzz)."
               else
@@ -471,17 +483,11 @@ jobs:
               fi
               cat "$patch_output_file" || echo "[SUSFS Diag] No patch output for main patch."
               rm -f "$patch_output_file"
-              echo "--- [SUSFS Diag] Main Patch Output End ---"
-            else
-              echo "::warning::[SUSFS Diag] Main SUSFS patch file ./${SUSFS_PATCH_FILENAME_IN_COMMON} not found in $(pwd). This might be intended."
             fi
-            
             FORMATTED_BRANCH_FOR_FIX_COMPARE="${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
             if [[ "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-08" || "$FORMATTED_BRANCH_FOR_FIX_COMPARE" == "android15-6.6-2024-09" ]]; then
-              echo "[SUSFS Diag] Applying fix for 6.6 kernel (in $(pwd))..."
               curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/fix/fix6.6.patch -o fix6.6.patch
               patch_output_file_66=$(mktemp)
-              echo "--- [SUSFS Diag] 6.6 Fix Patch Output (Command: patch -p1 < fix6.6.patch) ---"
               if patch -p1 < fix6.6.patch > "$patch_output_file_66" 2>&1; then
                 echo "[SUSFS Diag] 6.6 fix patch applied (exit code 0)."
               else
@@ -490,11 +496,9 @@ jobs:
               fi
               cat "$patch_output_file_66" || echo "[SUSFS Diag] No patch output for 6.6 fix."
               rm -f "$patch_output_file_66"
-              echo "--- [SUSFS Diag] 6.6 Fix Patch Output End ---"
             fi
             cd "$current_dir_before_cd_common" || echo "::warning::[SUSFS Diag] Failed to cd back from ./common."
           fi
-          echo "[SUSFS Diag] SUSFS patching (old logic) finished. PLEASE REVIEW LOGS CAREFULLY."
       - name: 应用内核补丁
         shell: bash
         run: |
@@ -506,8 +510,6 @@ jobs:
             if [ -f "$HOOKS_PATCH_FILE" ]; then
               cp "$HOOKS_PATCH_FILE" ./syscall_hooks.patch
               patch -p1 -F 3 < syscall_hooks.patch || { echo "::error::SukiSU hooks patch failed."; exit 1; }
-            else
-              echo "::error::SukiSU hooks patch file not found"; exit 1;
             fi
           }
           apply_zram_compression_patches() {
@@ -520,7 +522,7 @@ jobs:
               if [ -d "$src_lib" ]; then mkdir -p "$dst_lib"; if [ -n "$(ls -A "$src_lib" 2>/dev/null)" ]; then cp -r "${src_lib}/." "$dst_lib/" || exit 1; fi; fi
               local src_crypto="${ZRAM_PATCH_BASE}/lz4k/crypto"; local dst_crypto="./crypto"
               if [ -d "$src_crypto" ]; then mkdir -p "$dst_crypto"; if [ -n "$(ls -A "$src_crypto" 2>/dev/null)" ]; then cp -r "${src_crypto}/." "$dst_crypto/" || exit 1; fi
-              else echo "::error::ZRAM crypto src NOT FOUND: $src_crypto"; exit 1; fi
+              else exit 1; fi
               if [ -d "${ZRAM_PATCH_BASE}/lz4k_oplus" ]; then mkdir -p ./lib; cp -r "${ZRAM_PATCH_BASE}/lz4k_oplus" ./lib/ || exit 1; fi
               LZ4KD_PATCH="${ZRAM_PATCH_BASE}/zram_patch/${{env.SELECTED_KERNEL_VERSION}}/lz4kd.patch"
               if [ -f "$LZ4KD_PATCH" ]; then cp "$LZ4KD_PATCH" ./lz4kd.patch; patch -p1 -F 3 < lz4kd.patch || exit 1; fi
@@ -534,8 +536,6 @@ jobs:
             if [ -f "$HIDE_PATCH_FILE" ]; then
               cp "$HIDE_PATCH_FILE" ./hide_stuff.patch
               patch -p1 -F 3 < hide_stuff.patch || { echo "::error::Hide stuff patch failed."; exit 1; }
-            else
-              echo "::error::Hide stuff patch file not found"; exit 1;
             fi
           }
           apply_hooks_patch & PID_HOOKS=$!
@@ -546,7 +546,6 @@ jobs:
           wait $PID_ZRAM || FAIL=1
           wait $PID_HIDE || FAIL=1
           if [ "$FAIL" -eq 1 ]; then
-            echo "::error::One or more patch processes failed."
             exit 1
           fi
       - name: 配置ZRAM算法
@@ -554,7 +553,7 @@ jobs:
         run: |
           set -euo pipefail
           CONFIG_FILE_PATH="${{ env.GKI_DEFCONFIG_PATH_ENV }}"
-          if [ ! -f "$CONFIG_FILE_PATH" ]; then echo "::error::gki_defconfig not found for ZRAM config"; exit 1; fi
+          if [ ! -f "$CONFIG_FILE_PATH" ]; then exit 1; fi
           update_cfg() {
             local k="$1"; local v="$2"
             if grep -q "^${k}=" "$CONFIG_FILE_PATH"; then sed -i "s|^${k}=.*|${k}=${v}|" "$CONFIG_FILE_PATH"; else echo "${k}=${v}" >> "$CONFIG_FILE_PATH"; fi
@@ -576,7 +575,7 @@ jobs:
       - name: 配置SUSFS功能
         run: |
           set -euo pipefail
-          GKI_PATH="${{ env.GKI_DEFCONFIG_PATH_ENV }}"; if [ ! -f "$GKI_PATH" ]; then echo "::error::gki_defconfig not found for SUSFS config"; exit 1; fi
+          GKI_PATH="${{ env.GKI_DEFCONFIG_PATH_ENV }}"; if [ ! -f "$GKI_PATH" ]; then exit 1; fi
           upd_cfg() { local k="$1"; local v="$2"; sed -i -e "/^${k}=/d" -e "/^# ${k} is not set/d" "$GKI_PATH"; echo "${k}=${v}" >> "$GKI_PATH"; }
           cfgs_y=( "CONFIG_KSU" "CONFIG_KSU_MANUAL_HOOK" "CONFIG_TMPFS_XATTR" "CONFIG_TMPFS_POSIX_ACL" "CONFIG_IP_NF_TARGET_TTL" "CONFIG_IP6_NF_TARGET_HL" "CONFIG_IP6_NF_MATCH_HL" "CONFIG_TCP_CONG_ADVANCED" "CONFIG_TCP_CONG_BBR" "CONFIG_NET_SCH_FQ" "CONFIG_KSU_SUSFS" "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT" "CONFIG_KSU_SUSFS_SUS_PATH" "CONFIG_KSU_SUSFS_SUS_MOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT" "CONFIG_KSU_SUSFS_SUS_KSTAT" "CONFIG_KSU_SUSFS_TRY_UMOUNT" "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT" "CONFIG_KSU_SUSFS_SPOOF_UNAME" "CONFIG_KSU_SUSFS_ENABLE_LOG" "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS" "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG" "CONFIG_KSU_SUSFS_OPEN_REDIRECT" )
           cfgs_n=( "CONFIG_KSU_SUSFS_SUS_SU" "CONFIG_KSU_SUSFS_SUS_OVERLAYFS" "CONFIG_TCP_CONG_BIC" "CONFIG_TCP_CONG_WESTWOOD" "CONFIG_TCP_CONG_HTCP" )
@@ -639,44 +638,28 @@ jobs:
             set -euo pipefail
             set -x
             BAZEL_WAS_USED="false"
-
             execute_build_process() {
               cd "${{ env.KERNEL_SRC_ROOT }}" || exit 1
               B_SCRIPT="./build/build.sh"
               BZL_CACHE="/home/runner/.cache/bazel_disk_cache"
               mkdir -p "$BZL_CACHE"
               if [ -f "$B_SCRIPT" ]; then
-                echo "Using legacy build.sh script."
                 LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 BUILD_CONFIG=common/build.config.gki.aarch64 CC="/usr/bin/ccache clang" /usr/bin/time -v ./build/build.sh
               else
-                echo "Using Bazel build."
                 BAZEL_WAS_USED="true"
                 /usr/bin/time -v bash -c "tools/bazel build --disk_cache=\"${BZL_CACHE}\" --config=fast --lto=thin --profile=\"${BAZEL_PROFILE_PATH_IN_WORKSPACE}\" $BAZEL_OPTIMIZATION_FLAGS //common:kernel_aarch64_dist"
               fi
             }
-
             execute_build_process
-
-            echo "Ccache statistics after build:"
             ccache --show-stats
-
             if [ -n "${CCACHE_LOGFILE}" ] && [ -f "${CCACHE_LOGFILE}" ]; then
-              echo "Ccache log file (${CCACHE_LOGFILE}) size: $(du -sh ${CCACHE_LOGFILE} | cut -f1)"
-              echo "Last 10 lines of ccache log:"
               tail -n 10 "${CCACHE_LOGFILE}" || true
             fi
-
             if [ "$BAZEL_WAS_USED" = "true" ]; then
               if [ ! -f "${BAZEL_PROFILE_PATH_IN_WORKSPACE}" ]; then
                 echo "::warning::Bazel profile file was expected (Bazel build path taken) but not found at ${BAZEL_PROFILE_PATH_IN_WORKSPACE}."
-              else
-                echo "Bazel profile file found at ${BAZEL_PROFILE_PATH_IN_WORKSPACE}."
               fi
-            else
-              echo "Legacy build.sh path taken or Bazel profile not generated by this path, skipping Bazel profile file warning."
             fi
-
-            echo "Kernel compilation step finished."
       - name: KPM修补 (Android 12/13)
         if: env.EFFECTIVE_USE_KPM == 'true' && (env.SELECTED_ANDROID_VERSION == 'android12' || env.SELECTED_ANDROID_VERSION == 'android13') && env.SELECTED_KERNEL_VERSION != '6.6'
         run: |
@@ -712,24 +695,22 @@ jobs:
           elif [ -f "$BZL_IMG1" ]; then IMG_SRC="$BZL_IMG1"
           elif [ -f "$BZL_IMG2" ]; then IMG_SRC="$BZL_IMG2"
           else
-            echo "::error::Compiled Image not found."
             ls -R "${{ env.KERNEL_SRC_ROOT }}/out/" || true
             ls -R "${{ env.KERNEL_SRC_ROOT }}/bazel-bin/" || true
             exit 1
           fi
           AK3_DIR="$GITHUB_WORKSPACE/AnyKernel3"
-          if [ ! -d "$AK3_DIR" ]; then echo "::error::AnyKernel3 dir not found."; exit 1; fi
+          if [ ! -d "$AK3_DIR" ]; then exit 1; fi
           cp "$IMG_SRC" "$AK3_DIR/Image"
       - name: 验证内核镜像类型
         run: |
           set -euo pipefail
           IMG_VALIDATE="$GITHUB_WORKSPACE/AnyKernel3/Image"
-          if [ ! -f "$IMG_VALIDATE" ]; then echo "::error::Kernel Image not found for validation: $IMG_VALIDATE"; exit 1; fi
-          file_out=$(file "$IMG_VALIDATE"); echo "File output: $file_out"
+          if [ ! -f "$IMG_VALIDATE" ]; then exit 1; fi
+          file_out=$(file "$IMG_VALIDATE")
           if echo "$file_out" | grep -q "ARM64" && echo "$file_out" | grep -q "Linux kernel"; then
             echo "Validation OK."
           else
-            echo "::error::Validation FAILED: '$file_out'"
             exit 1
           fi
       - name: 生成发布信息和文件名
@@ -737,7 +718,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # 修正：使用从源码中提取的真实版本号
           _svn="${{ env.SUKI_VERSION_NUM }}"
           _kv="${{ env.SELECTED_KERNEL_VERSION }}"
           _sl="${{ env.SELECTED_SUB_LEVEL }}"
@@ -811,10 +791,10 @@ jobs:
           set -euo pipefail
           cd downloaded_artifact
           final_zip="${{ needs.build_kernel.outputs.artifact_name }}.zip"
-          if [ -z "$(ls -A .)" ]; then echo "::error::Downloaded artifact directory is empty."; exit 1; fi
-          zip -r9 "../${final_zip}" . 
+          if [ -z "$(ls -A .)" ]; then exit 1; fi
+          zip -r9 "../${final_zip}" .
           cd ..
-          if [ ! -f "${final_zip}" ]; then echo "::error::Failed to create zip package."; exit 1; fi
+          if [ ! -f "${final_zip}" ]; then exit 1; fi
           echo "packaged_zip=${final_zip}" >> $GITHUB_OUTPUT
       - name: 创建或更新 Release
         uses: ncipollo/release-action@v1
@@ -827,7 +807,6 @@ jobs:
 
             --------------------------------------------------
             **🔥 主要信息 🔥**
-            # 修正：使用从 build_kernel job 传递过来的、从源码中提取的真实 SukiSU 版本号
             * **SukiSU 版本:** `${{ needs.build_kernel.outputs.sukisu_version_from_source }}`
             * **基于内核:** `${{ github.event.inputs.kernel_to_build }}`
             * **功能分支:** `${{ github.event.inputs.kernelsu_branch }}`
