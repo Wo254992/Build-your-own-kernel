@@ -454,7 +454,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p ./common/fs && mkdir -p ./common/include/linux
-          SUSFS_PATCH_SRC_FILE_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
+          SUSFS_PATCH_SRC_FILE_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}.patch"
           SUSFS_PATCH_DEST_DIR_PATH="./common/"
           if [ -f "$SUSFS_PATCH_SRC_FILE_PATH" ]; then
             cp "$SUSFS_PATCH_SRC_FILE_PATH" "$SUSFS_PATCH_DEST_DIR_PATH" || echo "::warning::Failed to copy main patch file. Continuing..."
@@ -479,7 +479,7 @@ jobs:
           if ! cd ./common; then
             echo "::error::Failed to cd into ./common for patching."
           else
-            SUSFS_PATCH_FILENAME_IN_COMMON="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
+            SUSFS_PATCH_FILENAME_IN_COMMON="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_SUB_LEVEL }}.patch"
             if [ -f "./${SUSFS_PATCH_FILENAME_IN_COMMON}" ]; then
               patch_output_file=$(mktemp)
               if patch -p1 --fuzz=3 < "./${SUSFS_PATCH_FILENAME_IN_COMMON}" > "$patch_output_file" 2>&1; then
