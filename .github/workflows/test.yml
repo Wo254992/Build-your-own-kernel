@@ -91,7 +91,7 @@ on:
 
 jobs:
   precheck_sukisu_version:
-    name: 预检查SukiSU版本
+    name: 检查SukiSU版本
     runs-on: ubuntu-latest
     outputs:
       job_name_suffix: ${{ steps.calculate_version.outputs.job_suffix }}
@@ -101,7 +101,7 @@ jobs:
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends git
-      - name: 计算SukiSU预期版本号
+      - name: 计算SukiSU版本号
         id: calculate_version
         shell: bash
         run: |
@@ -125,10 +125,10 @@ jobs:
             
             if [[ "$release_tag" != "notag" && "$commit_hash" != "nohash" ]]; then
               suki_version_actual_for_output="${release_tag}-${commit_hash}@${branch_name}"
-              job_suffix_text=" (预期SukiSU ${suki_version_actual_for_output})"
+              job_suffix_text=" (SukiSU ${suki_version_actual_for_output})"
             else
               suki_version_actual_for_output="计算错误"
-              job_suffix_text=" (SukiSU - 版本预计算失败)"
+              job_suffix_text=" (SukiSU - 版本计算失败)"
               echo "::warning::Failed to pre-calculate SukiSU version."
             fi
             cd .. && rm -rf SukiSU_temp_for_version
