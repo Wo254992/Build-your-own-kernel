@@ -115,7 +115,6 @@ jobs:
             CLONE_BRANCH="dev"
           fi
           
-          echo "Attempting to clone SukiSU from $SUKI_REPO_URL branch $CLONE_BRANCH for pre-check..."
           if git clone --branch "$CLONE_BRANCH" --single-branch --depth=100 "$SUKI_REPO_URL" SukiSU_temp_for_version; then
             cd SukiSU_temp_for_version
             git fetch --unshallow >/dev/null 2>&1 || echo "Unshallow failed, proceeding anyway."
@@ -129,13 +128,11 @@ jobs:
             else
               suki_version_actual_for_output="计算错误"
               job_suffix_text=" (SukiSU - 版本预计算失败)"
-              echo "::warning::Failed to pre-calculate SukiSU version."
             fi
             cd .. && rm -rf SukiSU_temp_for_version
           else
             suki_version_actual_for_output="克隆错误"
             job_suffix_text=" (SukiSU - 预克隆失败)"
-            echo "::error::Failed to clone SukiSU repository for pre-check."
           fi
           
           echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
@@ -175,7 +172,6 @@ jobs:
             echo "::error::'kernel_to_build' input is empty."
             exit 1
           fi
-          echo "Input 'kernel_to_build': $kernel_input - basic validation passed."
       - name: 解析内核参数
         id: parse_kernel
         run: |
@@ -383,10 +379,23 @@ jobs:
           echo "Manually cloning SukiSU branch: $CLONE_BRANCH"
           git clone --depth=1 --branch "$CLONE_BRANCH" https://github.com/ShirkNeko/SukiSU-Ultra.git SukiSU
           
-          KCONFIG_PATH="common/Kconfig"
+          DRIVER_DIR="common/drivers"
+          KCONFIG_PATH="$DRIVER_DIR/Kconfig"
+          MAKEFILE_PATH="$DRIVER_DIR/Makefile"
+          
+          if [ ! -d "$DRIVER_DIR" ]; then
+            echo "::error::Driver directory $DRIVER_DIR not found!"
+            exit 1
+          fi
+          
+          cd "$DRIVER_DIR"
+          ln -sf ../../SukiSU/kernel kernelsu
+          echo "Symlink 'kernelsu' created in $DRIVER_DIR"
+          cd -
+          
           if [ -f "$KCONFIG_PATH" ]; then
-            if ! grep -q 'source "SukiSU/Kconfig"' "$KCONFIG_PATH"; then
-              echo 'source "SukiSU/Kconfig"' >> "$KCONFIG_PATH"
+            if ! grep -q "source \"drivers/kernelsu/Kconfig\"" "$KCONFIG_PATH"; then
+              echo 'source "drivers/kernelsu/Kconfig"' >> "$KCONFIG_PATH"
               echo "SukiSU Kconfig injected into $KCONFIG_PATH"
             fi
           else
@@ -394,10 +403,9 @@ jobs:
             exit 1
           fi
           
-          MAKEFILE_PATH="common/Makefile"
           if [ -f "$MAKEFILE_PATH" ]; then
-            if ! grep -q 'obj-y += SukiSU/' "$MAKEFILE_PATH"; then
-              echo -e '\nobj-y += SukiSU/' >> "$MAKEFILE_PATH"
+            if ! grep -q "obj-\$(CONFIG_KSU) += kernelsu/" "$MAKEFILE_PATH"; then
+              echo -e '\nobj-$(CONFIG_KSU) += kernelsu/' >> "$MAKEFILE_PATH"
               echo "SukiSU Makefile entry injected into $MAKEFILE_PATH"
             fi
           else
@@ -445,43 +453,42 @@ jobs:
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         shell: bash
         run: |
-          echo "[SUSFS Diag] Applying SUSFS patches (diagnostic mode)..."
           mkdir -p ./common/fs && mkdir -p ./common/include/linux
           SUSFS_PATCH_SRC_FILE_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
           SUSFS_PATCH_DEST_DIR_PATH="./common/"
           if [ -f "$SUSFS_PATCH_SRC_FILE_PATH" ]; then
-            cp "$SUSFS_PATCH_SRC_FILE_PATH" "$SUSFS_PATCH_DEST_DIR_PATH" || echo "::warning::[SUSFS Diag] Failed to copy main patch file. Continuing..."
+            cp "$SUSFS_PATCH_SRC_FILE_PATH" "$SUSFS_PATCH_DEST_DIR_PATH" || echo "::warning::Failed to copy main patch file. Continuing..."
           else
-            echo "::warning::[SUSFS Diag] Main SUSFS patch file not found: $SUSFS_PATCH_SRC_FILE_PATH. This might be expected."
+            echo "::warning::Main SUSFS patch file not found: $SUSFS_PATCH_SRC_FILE_PATH. This might be expected."
           fi
           SUSFS_FS_SRC_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/fs"
           SUSFS_FS_DEST_PATH="./common/fs/"
           if [ -d "$SUSFS_FS_SRC_PATH" ]; then
             if [ -n "$(ls -A "$SUSFS_FS_SRC_PATH" 2>/dev/null)" ]; then
-              cp -r ${SUSFS_FS_SRC_PATH}/* "$SUSFS_FS_DEST_PATH" || echo "::warning::[SUSFS Diag] SUSFS fs dir copy FAILED. CONTINUING."
+              cp -r ${SUSFS_FS_SRC_PATH}/* "$SUSFS_FS_DEST_PATH" || echo "::warning::SUSFS fs dir copy FAILED. CONTINUING."
             fi
           fi
           SUSFS_INCLUDE_SRC_PATH="${GITHUB_WORKSPACE}/susfs4ksu/kernel_patches/include/linux"
           SUSFS_INCLUDE_DEST_PATH="./common/include/linux/"
           if [ -d "$SUSFS_INCLUDE_SRC_PATH" ]; then
             if [ -n "$(ls -A "$SUSFS_INCLUDE_SRC_PATH" 2>/dev/null)" ]; then
-              cp -r ${SUSFS_INCLUDE_SRC_PATH}/* "$SUSFS_INCLUDE_DEST_PATH" || echo "::warning::[SUSFS Diag] SUSFS include/linux copy FAILED. CONTINUING."
+              cp -r ${SUSFS_INCLUDE_SRC_PATH}/* "$SUSFS_INCLUDE_DEST_PATH" || echo "::warning::SUSFS include/linux copy FAILED. CONTINUING."
             fi
           fi
           current_dir_before_cd_common=$(pwd)
           if ! cd ./common; then
-            echo "::error::[SUSFS Diag] Failed to cd into ./common for patching."
+            echo "::error::Failed to cd into ./common for patching."
           else
             SUSFS_PATCH_FILENAME_IN_COMMON="50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch"
             if [ -f "./${SUSFS_PATCH_FILENAME_IN_COMMON}" ]; then
               patch_output_file=$(mktemp)
               if patch -p1 --fuzz=3 < "./${SUSFS_PATCH_FILENAME_IN_COMMON}" > "$patch_output_file" 2>&1; then
-                echo "[SUSFS Diag] Main SUSFS patch applied (exit code 0 - may include fuzz)."
+                echo "Main SUSFS patch applied (exit code 0 - may include fuzz)."
               else
                 patch_exit_code=$?
-                echo "::warning::[SUSFS Diag] Main SUSFS patch command exited with code $patch_exit_code (1:rejections, 2:trouble). CONTINUING."
+                echo "::warning::Main SUSFS patch command exited with code $patch_exit_code (1:rejections, 2:trouble). CONTINUING."
               fi
-              cat "$patch_output_file" || echo "[SUSFS Diag] No patch output for main patch."
+              cat "$patch_output_file" || echo "No patch output for main patch."
               rm -f "$patch_output_file"
             fi
             FORMATTED_BRANCH_FOR_FIX_COMPARE="${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}-${{ env.SELECTED_OS_PATCH_LEVEL }}"
@@ -489,15 +496,15 @@ jobs:
               curl -LSs https://github.com/zzh20188/GKI_KernelSU_SUSFS/raw/refs/heads/fix/fix6.6.patch -o fix6.6.patch
               patch_output_file_66=$(mktemp)
               if patch -p1 < fix6.6.patch > "$patch_output_file_66" 2>&1; then
-                echo "[SUSFS Diag] 6.6 fix patch applied (exit code 0)."
+                echo "6.6 fix patch applied (exit code 0)."
               else
                 patch_exit_code_66=$?
-                echo "::warning::[SUSFS Diag] 6.6 fix patch command exited with code $patch_exit_code_66. CONTINUING."
+                echo "::warning::6.6 fix patch command exited with code $patch_exit_code_66. CONTINUING."
               fi
-              cat "$patch_output_file_66" || echo "[SUSFS Diag] No patch output for 6.6 fix."
+              cat "$patch_output_file_66" || echo "No patch output for 6.6 fix."
               rm -f "$patch_output_file_66"
             fi
-            cd "$current_dir_before_cd_common" || echo "::warning::[SUSFS Diag] Failed to cd back from ./common."
+            cd "$current_dir_before_cd_common" || echo "::warning::Failed to cd back from ./common."
           fi
       - name: 应用内核补丁
         shell: bash
@@ -708,9 +715,7 @@ jobs:
           IMG_VALIDATE="$GITHUB_WORKSPACE/AnyKernel3/Image"
           if [ ! -f "$IMG_VALIDATE" ]; then exit 1; fi
           file_out=$(file "$IMG_VALIDATE")
-          if echo "$file_out" | grep -q "ARM64" && echo "$file_out" | grep -q "Linux kernel"; then
-            echo "Validation OK."
-          else
+          if ! (echo "$file_out" | grep -q "ARM64" && echo "$file_out" | grep -q "Linux kernel"); then
             exit 1
           fi
       - name: 生成发布信息和文件名
