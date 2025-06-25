@@ -101,7 +101,7 @@ jobs:
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends git
-      - name: 计算SukiSU版本号 (最终修正)
+      - name: 计算SukiSU版本号
         id: calculate_version
         shell: bash
         run: |
@@ -109,10 +109,7 @@ jobs:
           suki_version_actual_for_output="获取失败"
           job_suffix_text=""
           SUKI_REPO_URL="https://github.com/ShirkNeko/SukiSU-Ultra.git"
-          CLONE_BRANCH="main"
-          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
-            CLONE_BRANCH="dev"
-          fi
+          CLONE_BRANCH="susfs-main"
           echo "Attempting to clone SukiSU from $SUKI_REPO_URL branch $CLONE_BRANCH..."
           if git clone --branch "$CLONE_BRANCH" --single-branch --depth=100 "$SUKI_REPO_URL" SukiSU_temp_for_version; then
             cd SukiSU_temp_for_version
@@ -752,7 +749,7 @@ jobs:
           _tag=""
           _stable_group_tag=""
           if [[ "$_svn" != "NoVer" && "$_svn" != "" ]]; then
-            _sanitized_svn=$(echo "$_svn" | sed 's/@/_at_/g' | sed 's/[^a-zA-Z0-9._-]/_/g')
+            _sanitized_svn=$(echo "$_svn" | sed 's/[^a-zA-Z0-9._@-]/_/g')
             _stable_group_tag="${_base}-${_sanitized_svn}"
             _tit="${_base} ${_svn}"
             _aname="AnyKernel3_${_base}_${_sanitized_svn}_${_kv}-${_sl}${_suf}"
