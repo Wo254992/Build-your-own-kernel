@@ -475,7 +475,6 @@ jobs:
           else
             echo "版本号为空，使用默认后缀"
             FINAL_VERSION_SUFFIX="-SukiSU-Ultra"
-            sed -i 's|echo "$res"|echo "$res-SukiSU-Ultra"|' ./common/scripts/setlocalversion
           fi
           
           echo "final_kernel_local_version_for_release_body=${FINAL_VERSION_SUFFIX}" >> $GITHUB_OUTPUT
