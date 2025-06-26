@@ -125,11 +125,13 @@ jobs:
 
           cd SukiSU_temp_for_version
 
+          # 步骤 1: 从主分支获取最新的 release tag
           DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
           echo "Default branch is: $DEFAULT_BRANCH"
           release_tag=$(git describe --tags --abbrev=0 "origin/$DEFAULT_BRANCH" 2>/dev/null || echo "notag")
           echo "Latest release tag from '$DEFAULT_BRANCH' is: $release_tag"
 
+          # 步骤 2: 切换到目标开发分支, 获取其 commit hash
           echo "Checking out '$TECHNICAL_BRANCH' to get its specific commit hash..."
           if ! git checkout "$TECHNICAL_BRANCH"; then
             echo "::error::Failed to checkout '$TECHNICAL_BRANCH'. It may not exist in the repo."
@@ -138,6 +140,7 @@ jobs:
           SHORT_COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
           echo "Commit hash from '$TECHNICAL_BRANCH' is: $SHORT_COMMIT_HASH"
           
+          # 步骤 3: 拼接成最终版本号
           if [[ "$release_tag" != "notag" && "$SHORT_COMMIT_HASH" != "nohash" ]]; then
             suki_version_actual="${release_tag}-${SHORT_COMMIT_HASH}@${TECHNICAL_BRANCH}"
             job_suffix_text=" (预期SukiSU ${suki_version_actual})"
@@ -177,7 +180,6 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
       SUKI_VERSION_NUM: ${{ needs.precheck_sukisu_version.outputs.sukisu_version_string }}
     steps:
-      # Steps from 1 to 21 are the same...
       - name: 验证输入参数
         run: |
           set -euo pipefail
@@ -458,7 +460,6 @@ jobs:
           for fp in "${{ env.KERNEL_SRC_ROOT }}/common/build.config.gki" "${{ env.KERNEL_SRC_ROOT }}/common/build.config.gki.aarch64" "${{ env.KERNEL_SRC_ROOT }}/common/build.config"; do
             if [ -f "$fp" ]; then sed -i 's/check_defconfig//g' "$fp"; fi
           done
-      # 修复点: 采用包装脚本的方式修改版本号, 避免重复
       - name: 配置内核内部版本参数
         id: configure_kernel_version
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
@@ -466,34 +467,35 @@ jobs:
           set -euo pipefail
           FINAL_VERSION_SUFFIX=""
           if [[ -n "${{ github.event.inputs.custom_version_suffix }}" ]]; then
-            echo "使用自定义后缀: ${{ github.event.inputs.custom_version_suffix }}"
+            echo "版本号不为空，使用自定义后缀: ${{ github.event.inputs.custom_version_suffix }}"
             FINAL_VERSION_SUFFIX="${{ github.event.inputs.custom_version_suffix }}"
+            # 修复：总是附加后缀，而不是替换整个版本字符串
+            sed -i 's|echo "$res"|echo "$res${{ github.event.inputs.custom_version_suffix }}"|' ./common/scripts/setlocalversion
           else
-            echo "使用默认后缀: -SukiSU-Ultra"
+            echo "版本号为空，使用默认后缀"
             FINAL_VERSION_SUFFIX="-SukiSU-Ultra"
+            sed -i 's|echo "$res"|echo "$res-SukiSU-Ultra"|' ./common/scripts/setlocalversion
           fi
           
-          # 将最终要追加的后缀写入一个临时文件
-          echo "$FINAL_VERSION_SUFFIX" > /tmp/localversion.add
-          
-          # 重命名原始脚本
-          mv ./common/scripts/setlocalversion ./common/scripts/setlocalversion.real
-          
-          # 创建新的包装脚本
-          cat > ./common/scripts/setlocalversion << EOF
-          #!/bin/sh
-          # 首先执行原始脚本, 捕获其输出
-          res=\$(/bin/sh \${0}.real)
-          # 读取我们要追加的后缀
-          add=\$(cat /tmp/localversion.add)
-          # 打印最终拼接的结果
-          echo "\$res\$add"
-          EOF
-
-          chmod +x ./common/scripts/setlocalversion
-          
-          # 为了 Release Body 显示正确, 我们需要输出最终追加的后缀
           echo "final_kernel_local_version_for_release_body=${FINAL_VERSION_SUFFIX}" >> $GITHUB_OUTPUT
+
+          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
+          echo "Setting build time to: $CURRENT_TIME"
+          perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
+
+          if [ "${{ env.SELECTED_KERNEL_VERSION }}" = "6.1" ] || [ "${{ env.SELECTED_KERNEL_VERSION }}" = "6.6" ]; then
+            sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
+          fi
+          
+          if [ -f "build/build.sh" ]; then
+            sed -i 's/-dirty//' ./common/scripts/setlocalversion
+          else
+            sed -i 's/-dirty//' ./common/scripts/setlocalversion
+            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
+            rm -rf ./common/android/abi_gki_protected_exports_*
+            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
+            # 修复：删除此处对 gki_defconfig 的重复修改，避免版本号重复
+          fi
       - name: 校验关键内核配置
         run: |
           set -euo pipefail
