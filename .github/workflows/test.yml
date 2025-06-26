@@ -90,9 +90,7 @@ on:
 
 jobs:
   build_kernel:
-    # 修复点: 任务名称简化, 不再依赖 precheck 任务
     name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}
-    # 修复点: 移除 precheck 依赖
     runs-on: ubuntu-latest
     outputs:
       artifact_name: ${{ steps.generate_release_info.outputs.artifact_name_for_release }}
@@ -110,7 +108,6 @@ jobs:
       CCACHE_COMPILERCHECK: '%compiler% -dumpmachine; %compiler% -dumpversion'
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
-      # 修复点: 移除 EXPECTED_SUKI_VERSION 环境变量
       BAZEL_OPTIMIZATION_FLAGS: "--jobs=$(nproc) --local_ram_resources=HOST_RAM*0.8"
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json
@@ -123,6 +120,15 @@ jobs:
           if [[ -z "$kernel_input" ]]; then
             echo "::error::'kernel_to_build' input is empty."
             exit 1
+          fi
+      # 修复点: 新增决策步骤
+      - name: 确定SukiSU技术分支
+        id: determine_branch
+        run: |
+          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
+            echo "technical_branch=susfs-1.5.8" >> "$GITHUB_OUTPUT"
+          else
+            echo "technical_branch=susfs-main" >> "$GITHUB_OUTPUT"
           fi
       - name: 解析内核参数
         id: parse_kernel
@@ -296,20 +302,20 @@ jobs:
             fi
             ${{ env.REPO }} --trace sync -c -j$(nproc --all) --no-tags --fail-fast --current-branch
       - name: 集成SukiSU (KernelSU)
+        # 修复点: 使用决策步骤的输出
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         run: |
           set -euo pipefail
           echo "Adding SukiSU..."
-          SUKI_BRANCH_ARG="-s susfs-main" # Stable
-          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
-              SUKI_BRANCH_ARG="-s susfs-1.5.8" # Dev
-          fi
+          SUKI_BRANCH_ARG="-s ${{ steps.determine_branch.outputs.technical_branch }}"
           echo "Using SukiSU setup argument: $SUKI_BRANCH_ARG"
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash $SUKI_BRANCH_ARG
       - name: 提取SukiSU真实版本
-        # 修复点: 步骤改名并简化逻辑
         id: extract_version
+        # 修复点: 重写版本提取逻辑
         shell: bash
+        env:
+          TECHNICAL_BRANCH_NAME: ${{ steps.determine_branch.outputs.technical_branch }}
         run: |
           set -euo pipefail
           SUKI_SRC_PATH="${{ env.KERNEL_SRC_ROOT }}/SukiSU"
@@ -324,13 +330,10 @@ jobs:
             
             release_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "notag")
             commit_hash=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
-            branch_name=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "nobranch")
             
-            if [[ "$release_tag" != "notag" && "$commit_hash" != "nohash" ]]; then
-              actual_suki_version="${release_tag}-${commit_hash}@${branch_name}"
-            else
-              actual_suki_version="计算错误"
-            fi
+            # 使用传入的技术分支名, 而不是 git 命令检测, 来保证准确性
+            actual_suki_version="${release_tag}-${commit_hash}@${TECHNICAL_BRANCH_NAME}"
+            
             cd - >/dev/null
           else
             actual_suki_version="源码目录不存在"
