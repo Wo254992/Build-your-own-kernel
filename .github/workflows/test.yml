@@ -7,7 +7,6 @@ concurrency:
   group: kernel-build-${{ github.ref }}-${{ github.event.inputs.kernel_to_build }}
   cancel-in-progress: true
 
-# 修复点: 恢复完整的 on 触发器块
 on:
   workflow_dispatch:
     inputs:
@@ -90,7 +89,6 @@ on:
         default: 'true'
 
 jobs:
-  # 修复点: 恢复预检查任务, 并使其成为版本号的唯一事实来源
   precheck_sukisu_version:
     name: 预计算SukiSU版本号
     runs-on: ubuntu-latest
@@ -119,31 +117,49 @@ jobs:
           echo "technical_branch=${TECHNICAL_BRANCH}" >> $GITHUB_OUTPUT
           
           echo "Pre-checking SukiSU branch: $TECHNICAL_BRANCH"
-          # 在一个干净的临时目录中进行克隆, 确保历史记录的纯净
-          if git clone --branch "$TECHNICAL_BRANCH" https://github.com/ShirkNeko/SukiSU-Ultra.git SukiSU_temp_for_version; then
+          
+          # 修复点: 采用带回退机制的克隆方法
+          if git clone --branch "$TECHNICAL_BRANCH" --depth=50 "$SUKI_REPO_URL" SukiSU_temp_for_version >/dev/null 2>&1; then
+            echo "Direct clone of branch/tag '$TECHNICAL_BRANCH' succeeded."
             cd SukiSU_temp_for_version
-            # 确保拉取所有标签和历史
-            git fetch --prune --unshallow --tags >/dev/null 2>&1 || echo "Unshallow a full repo, ignoring."
-            
-            FULL_COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "nohash")
-            SHORT_COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
-            release_tag=$(git describe --tags --abbrev=0 "$FULL_COMMIT_HASH" 2>/dev/null || echo "notag")
-            
-            if [[ "$release_tag" != "notag" && "$SHORT_COMMIT_HASH" != "nohash" ]]; then
-              suki_version_actual="${release_tag}-${SHORT_COMMIT_HASH}@${TECHNICAL_BRANCH}"
-              job_suffix_text=" (预期SukiSU ${suki_version_actual})"
-            else
-              suki_version_actual="计算错误 - tag: ${release_tag}, hash: ${SHORT_COMMIT_HASH}"
-              job_suffix_text=" (SukiSU - 版本预计算失败)"
-            fi
-            cd .. && rm -rf SukiSU_temp_for_version
           else
-            suki_version_actual="克隆错误"
-            job_suffix_text=" (SukiSU - 预克隆失败)"
+            echo "Direct clone failed. Using fallback method..."
+            if git clone --depth=1 "$SUKI_REPO_URL" SukiSU_temp_for_version >/dev/null 2>&1; then
+              cd SukiSU_temp_for_version
+              echo "Fallback: Checking out '$TECHNICAL_BRANCH'..."
+              git fetch --depth=50 origin "$TECHNICAL_BRANCH" >/dev/null 2>&1
+              git checkout "$TECHNICAL_BRANCH" >/dev/null 2>&1
+            else
+              echo "::error::Fallback clone also failed. Repo URL might be incorrect or inaccessible."
+              suki_version_actual="克隆错误"
+              job_suffix_text=" (SukiSU - 预克隆失败)"
+              echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
+              echo "suki_version_actual=${suki_version_actual}" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+          fi
+
+          # 此时, 我们已成功检出所需代码
+          echo "Successfully checked out. Now describing version..."
+          git fetch --prune --unshallow --tags >/dev/null 2>&1 || echo "Unshallow a full repo, ignoring."
+          
+          FULL_COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "nohash")
+          SHORT_COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
+          release_tag=$(git describe --tags --abbrev=0 "$FULL_COMMIT_HASH" 2>/dev/null || echo "notag")
+          
+          if [[ "$release_tag" != "notag" && "$SHORT_COMMIT_HASH" != "nohash" ]]; then
+            suki_version_actual="${release_tag}-${SHORT_COMMIT_HASH}@${TECHNICAL_BRANCH}"
+            job_suffix_text=" (预期SukiSU ${suki_version_actual})"
+          else
+            suki_version_actual="计算错误 - tag: ${release_tag}, hash: ${SHORT_COMMIT_HASH}"
+            job_suffix_text=" (SukiSU - 版本预计算失败)"
           fi
           
           echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
           echo "suki_version_actual=${suki_version_actual}" >> $GITHUB_OUTPUT
+          
+          # 清理
+          cd .. && rm -rf SukiSU_temp_for_version
 
   build_kernel:
     name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}${{ needs.precheck_sukisu_version.outputs.job_name_suffix }}
@@ -158,7 +174,6 @@ jobs:
       current_build_date_formatted_output: ${{ steps.generate_suffixes.outputs.current_build_date_formatted_for_release_body }}
       parsed_kernel_version_output: ${{ steps.parse_kernel.outputs.parsed_kernel_version }}
       parsed_sub_level_output: ${{ steps.parse_kernel.outputs.parsed_sub_level }}
-      # 修复点: 直接使用 precheck 的输出
       sukisu_version_from_source: ${{ needs.precheck_sukisu_version.outputs.sukisu_version_string }}
       gki_defconfig_path_output: ${{ steps.set_core_paths.outputs.gki_defconfig_path_output }}
       effective_kpm_setting: ${{ steps.kpm_settings.outputs.effective_kpm_value }}
@@ -170,7 +185,6 @@ jobs:
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json
       DEBIAN_FRONTEND: noninteractive
-      # 修复点: 直接使用 precheck 的输出
       SUKI_VERSION_NUM: ${{ needs.precheck_sukisu_version.outputs.sukisu_version_string }}
     steps:
       - name: 验证输入参数
@@ -354,7 +368,6 @@ jobs:
           SUKI_BRANCH_ARG="-s ${{ needs.precheck_sukisu_version.outputs.technical_branch }}"
           echo "Using SukiSU setup argument: $SUKI_BRANCH_ARG"
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash $SUKI_BRANCH_ARG
-      # 修复点: 此处不再需要提取版本号, 因为已由 precheck 任务完成
       - name: 应用SUSFS补丁
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         shell: bash
@@ -606,11 +619,11 @@ jobs:
           _tit=""
           _tag=""
           _stable_group_tag=""
-          if [[ "$_svn" != "NoVer" && "$_svn" != "" && "$_svn" != "获取失败" && ! "$_svn" == *notag* && ! "$_svn" == *计算错误* && ! "$_svn" == *源码目录不存在* ]]; then
+          # 检查预计算的版本号是否有效
+          if [[ "$_svn" != "NoVer" && "$_svn" != "" && "$_svn" != "获取失败" && ! "$_svn" == *notag* && ! "$_svn" == *计算错误* && ! "$_svn" == *克隆错误* && ! "$_svn" == *源码目录不存在* ]]; then
             _sanitized_svn=$(echo "$_svn" | sed 's/[^a-zA-Z0-9._@-]/_/g')
             _stable_group_tag="${_base}-${_sanitized_svn}"
             _tit="${_base} ${_svn}"
-            # 修复点: 文件名不使用自定义后缀, 而是用日期
             _aname="AnyKernel3_${_base}_${_sanitized_svn}_${_kv}-${_sl}-${_date}"
             _tag="${_base}-${_sanitized_svn}_${_kv}-${_sl}-${_date}"
           else
