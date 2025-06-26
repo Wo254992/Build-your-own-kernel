@@ -1,93 +1,3 @@
-name: 内核编译
-
-permissions:
-  contents: read
-
-concurrency:
-  group: kernel-build-${{ github.ref }}-${{ github.event.inputs.kernel_to_build }}
-  cancel-in-progress: true
-
-on:
-  workflow_dispatch:
-    inputs:
-      kernel_to_build:
-        description: "选择内核版本"
-        required: true
-        type: choice
-        options:
-          - "android12_5.10_168_2023-04_r9"
-          - "android12_5.10_198_2024-01_r17"
-          - "android12_5.10_205_2024-03_r9"
-          - "android12_5.10_209_2024-05_r13"
-          - "android12_5.10_218_2024-08_r14"
-          - "android12_5.10_226_2024-11_r8"
-          - "android12_5.10_233_2025-02_r1"
-          - "android12_5.10_X_lts_r1"
-          - "android13_5.10_198_2024-01_"
-          - "android13_5.10_205_2024-03_"
-          - "android13_5.10_209_2024-05_"
-          - "android13_5.10_214_2024-07_"
-          - "android13_5.10_218_2024-08_"
-          - "android13_5.10_223_2024-11_"
-          - "android13_5.10_228_2025-01_"
-          - "android13_5.10_X_lts_"
-          - "android13_5.15_123_2023-11_"
-          - "android13_5.15_137_2024-01_"
-          - "android13_5.15_144_2024-03_"
-          - "android13_5.15_148_2024-05_"
-          - "android13_5.15_151_2024-08_"
-          - "android13_5.15_167_2024-11_"
-          - "android13_5.15_170_2025-01_"
-          - "android13_5.15_X_lts_"
-          - "android14_5.15_131_2023-11_"
-          - "android14_5.15_137_2024-01_"
-          - "android14_5.15_144_2024-03_"
-          - "android14_5.15_148_2024-05_"
-          - "android14_5.15_149_2024-06_"
-          - "android14_5.15_153_2024-07_"
-          - "android14_5.15_158_2024-08_"
-          - "android14_5.15_167_2024-11_"
-          - "android14_5.15_170_2025-01_"
-          - "android14_6.1_75_2024-05_"
-          - "android15_6.6_50_2024-10_"
-          - "android15_6.6_56_2024-11_"
-          - "android15_6.6_57_2024-12_"
-          - "android15_6.6_58_2025-01_"
-          - "android15_6.6_66_2025-02_"
-          - "android15_6.6_77_2025-03_"
-          - "android15_6.6_X_lts_"
-        default: "android14_6.1_75_2024-05_"
-      kernelsu_branch:
-        description: "选择SukiSU功能分支"
-        required: true
-        type: choice
-        options:
-          - Stable
-          - Dev
-        default: Dev
-      custom_version_suffix:
-        description: '自定义内核版本后缀 (留空则使用默认后缀 -SukiSU-Ultra)'
-        required: false
-        type: string
-      use_zram:
-        description: '启用额外ZRAM算法'
-        required: true
-        type: boolean
-        default: true
-      use_kpm:
-        description: '启用KPM功能'
-        required: true
-        type: boolean
-        default: false
-      upload_to_release:
-        description: '是否上传到 GitHub Release'
-        required: true
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-        default: 'true'
-
 jobs:
   build_kernel:
     name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}
@@ -121,7 +31,6 @@ jobs:
             echo "::error::'kernel_to_build' input is empty."
             exit 1
           fi
-      # 修复点: 新增决策步骤
       - name: 确定SukiSU技术分支
         id: determine_branch
         run: |
@@ -302,7 +211,6 @@ jobs:
             fi
             ${{ env.REPO }} --trace sync -c -j$(nproc --all) --no-tags --fail-fast --current-branch
       - name: 集成SukiSU (KernelSU)
-        # 修复点: 使用决策步骤的输出
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         run: |
           set -euo pipefail
@@ -310,29 +218,43 @@ jobs:
           SUKI_BRANCH_ARG="-s ${{ steps.determine_branch.outputs.technical_branch }}"
           echo "Using SukiSU setup argument: $SUKI_BRANCH_ARG"
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash $SUKI_BRANCH_ARG
+      
+      # 修复点: 彻底重写此步骤以确保版本号正确
       - name: 提取SukiSU真实版本
         id: extract_version
-        # 修复点: 重写版本提取逻辑
         shell: bash
         env:
           TECHNICAL_BRANCH_NAME: ${{ steps.determine_branch.outputs.technical_branch }}
         run: |
           set -euo pipefail
           SUKI_SRC_PATH="${{ env.KERNEL_SRC_ROOT }}/SukiSU"
-          if [ ! -d "$SUKI_SRC_PATH" ]; then
+          if [ ! -d "$SUKI_SRC_PATH" ] && [ -d "${{ env.KERNEL_SRC_ROOT }}/KernelSU" ]; then
             SUKI_SRC_PATH="${{ env.KERNEL_SRC_ROOT }}/KernelSU"
           fi
+          
           actual_suki_version="获取失败"
           
           if [ -d "$SUKI_SRC_PATH/.git" ]; then
             cd "$SUKI_SRC_PATH"
-            git fetch --unshallow --tags >/dev/null 2>&1 || echo "Unshallow failed, proceeding anyway."
             
-            release_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "notag")
-            commit_hash=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
-            
-            # 使用传入的技术分支名, 而不是 git 命令检测, 来保证准确性
-            actual_suki_version="${release_tag}-${commit_hash}@${TECHNICAL_BRANCH_NAME}"
+            echo "正在修复 SukiSU 仓库历史记录以获取标签..."
+            # 步骤 1: 保存准确的 commit hash
+            FULL_COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "nohash")
+            SHORT_COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
+
+            if [[ "$FULL_COMMIT_HASH" != "nohash" ]]; then
+              # 步骤 2: 强制拉取所有标签和加深历史记录, 修复浅层克隆问题
+              # --unshallow 可能会在已经是完整克隆时报错, 所以我们忽略它的错误
+              git fetch --prune --unshallow --tags >/dev/null 2>&1 || echo "Unshallow a full repo, ignoring."
+              
+              # 步骤 3: 使用准确的 commit hash 精确查找标签
+              release_tag=$(git describe --tags --abbrev=0 "$FULL_COMMIT_HASH" 2>/dev/null || echo "notag")
+              
+              # 使用传入的技术分支名, 而不是 git 命令检测, 来保证版本号的准确性
+              actual_suki_version="${release_tag}-${SHORT_COMMIT_HASH}@${TECHNICAL_BRANCH_NAME}"
+            else
+              actual_suki_version="计算错误-无法获取Commit"
+            fi
             
             cd - >/dev/null
           else
@@ -343,6 +265,7 @@ jobs:
           
           echo "final_suki_version=${actual_suki_version}" >> "$GITHUB_OUTPUT"
           echo "SUKI_VERSION_NUM=${actual_suki_version}" >> "$GITHUB_ENV"
+
       - name: 应用SUSFS补丁
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         shell: bash
@@ -594,7 +517,7 @@ jobs:
           _tit=""
           _tag=""
           _stable_group_tag=""
-          if [[ "$_svn" != "NoVer" && "$_svn" != "" && "$_svn" != "获取失败" && "$_svn" != "计算错误" && "$_svn" != "源码目录不存在" ]]; then
+          if [[ "$_svn" != "NoVer" && "$_svn" != "" && "$_svn" != "获取失败" && "$_svn" != "计算错误" && "$_svn" != "源码目录不存在" && ! "$_svn" == notag* ]]; then
             _sanitized_svn=$(echo "$_svn" | sed 's/[^a-zA-Z0-9._@-]/_/g')
             _stable_group_tag="${_base}-${_sanitized_svn}"
             _tit="${_base} ${_svn}"
