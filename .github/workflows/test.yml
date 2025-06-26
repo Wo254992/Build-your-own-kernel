@@ -109,11 +109,13 @@ jobs:
           job_suffix_text=""
           SUKI_REPO_URL="https://github.com/ShirkNeko/SukiSU-Ultra.git"
           
-          CLONE_BRANCH="main" # Stable
+          # 修复点: 根据用户选择映射到正确的技术分支名
+          CLONE_BRANCH="susfs-main" # Stable
           if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
-            CLONE_BRANCH="dev"
+            CLONE_BRANCH="susfs-1.5.8" # Dev
           fi
           
+          echo "Pre-checking SukiSU branch: $CLONE_BRANCH"
           if git clone --branch "$CLONE_BRANCH" --single-branch --depth=100 "$SUKI_REPO_URL" SukiSU_temp_for_version; then
             cd SukiSU_temp_for_version
             git fetch --unshallow >/dev/null 2>&1 || echo "Unshallow failed, proceeding anyway."
@@ -301,7 +303,6 @@ jobs:
         run: |
           set -euo pipefail
           ANYKERNEL_BRANCH="gki-2.0"
-          # 修复点：确保克隆 ShirkNeko 的 susfs4ksu 仓库
           SUSFS_BRANCH="gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
           git clone https://github.com/WildPlusKernel/AnyKernel3.git -b "$ANYKERNEL_BRANCH" AnyKernel3
           git clone https://github.com/ShirkNeko/susfs4ksu.git -b "$SUSFS_BRANCH" susfs4ksu
@@ -348,20 +349,18 @@ jobs:
         run: |
           set -euo pipefail
           echo "Adding SukiSU..."
-          # 修复点：使用 setup.sh 脚本集成 SukiSU
-          SUKI_BRANCH_ARG=""
-          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Stable" ]]; then
-            SUKI_BRANCH_ARG="-s susfs-main"
-          else # Dev
-            SUKI_BRANCH_ARG="-s susfs-1.5.8" # SukiSU 的 dev 分支通常对应 susfs-1.5.8
+          # 修复点: 根据用户选择, 向setup.sh传递正确的分支参数
+          SUKI_BRANCH_ARG="-s susfs-main" # Stable
+          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
+              SUKI_BRANCH_ARG="-s susfs-1.5.8" # Dev
           fi
+          echo "Using SukiSU setup argument: $SUKI_BRANCH_ARG"
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash $SUKI_BRANCH_ARG
       - name: 提取并验证SukiSU真实版本
         id: verify_version
         shell: bash
         run: |
           set -euo pipefail
-          # 修复点：SukiSU现在集成在 SukiSU 或 KernelSU 目录中
           SUKI_SRC_PATH="${{ env.KERNEL_SRC_ROOT }}/SukiSU"
           if [ ! -d "$SUKI_SRC_PATH" ]; then
             SUKI_SRC_PATH="${{ env.KERNEL_SRC_ROOT }}/KernelSU"
@@ -403,17 +402,9 @@ jobs:
         run: |
           set -euo pipefail
           echo "Applying SUSFS patches..."
-
-          # 修复点: 采用参考工作流的补丁逻辑
-          # 1. 复制SUSFS核心文件
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch ./common/
           cp -r ../susfs4ksu/kernel_patches/fs/* ./common/fs/
           cp -r ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-
-          # 2. 为 SukiSU/KernelSU 自身打补丁 (如果需要)
-          # SukiSU 通常不需要额外补丁来启用 susfs，setup.sh 已处理
-
-          # 3. 为内核 common 部分打补丁
           cd ./common
           patch -p1 --fuzz=3 < 50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch || { echo "::error::SUSFS common patch failed."; exit 1; }
           cd - >/dev/null
@@ -509,8 +500,6 @@ jobs:
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         run: |
           set -euo pipefail
-          
-          # 修复点: 采用参考工作流中的版本号和时间戳修改方法
           FINAL_VERSION_SUFFIX=""
           if [[ -n "${{ github.event.inputs.custom_version_suffix }}" ]]; then
             echo "版本号不为空，使用自定义后缀: ${{ github.event.inputs.custom_version_suffix }}"
@@ -535,7 +524,6 @@ jobs:
           if [ -f "build/build.sh" ]; then
             sed -i 's/-dirty//' ./common/scripts/setlocalversion
           else
-            # For Bazel builds
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
             rm -rf ./common/android/abi_gki_protected_exports_*
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
