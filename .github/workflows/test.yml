@@ -7,6 +7,7 @@ concurrency:
   group: kernel-build-${{ github.ref }}-${{ github.event.inputs.kernel_to_build }}
   cancel-in-progress: true
 
+# 修复点: 恢复完整的 on 触发器块
 on:
   workflow_dispatch:
     inputs:
@@ -66,7 +67,7 @@ on:
           - Dev
         default: Dev
       custom_version_suffix:
-        description: '自定义内核版本后缀 (留空则使用默认后缀 -SukiSU-Ultra)'
+        description: '自定义内核内部版本后缀(uname -r), 留空则使用默认值'
         required: false
         type: string
       use_zram:
@@ -89,8 +90,64 @@ on:
         default: 'true'
 
 jobs:
+  # 修复点: 恢复预检查任务, 并使其成为版本号的唯一事实来源
+  precheck_sukisu_version:
+    name: 预计算SukiSU版本号
+    runs-on: ubuntu-latest
+    outputs:
+      job_name_suffix: ${{ steps.calculate_version.outputs.job_suffix }}
+      sukisu_version_string: ${{ steps.calculate_version.outputs.suki_version_actual }}
+      technical_branch: ${{ steps.calculate_version.outputs.technical_branch }}
+    steps:
+      - name: 安装Git
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends git
+      - name: 计算SukiSU版本号
+        id: calculate_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          suki_version_actual="获取失败"
+          job_suffix_text=""
+          SUKI_REPO_URL="https://github.com/ShirkNeko/SukiSU-Ultra.git"
+          
+          TECHNICAL_BRANCH="susfs-main" # Stable
+          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
+            TECHNICAL_BRANCH="susfs-1.5.8" # Dev
+          fi
+          echo "technical_branch=${TECHNICAL_BRANCH}" >> $GITHUB_OUTPUT
+          
+          echo "Pre-checking SukiSU branch: $TECHNICAL_BRANCH"
+          # 在一个干净的临时目录中进行克隆, 确保历史记录的纯净
+          if git clone --branch "$TECHNICAL_BRANCH" https://github.com/ShirkNeko/SukiSU-Ultra.git SukiSU_temp_for_version; then
+            cd SukiSU_temp_for_version
+            # 确保拉取所有标签和历史
+            git fetch --prune --unshallow --tags >/dev/null 2>&1 || echo "Unshallow a full repo, ignoring."
+            
+            FULL_COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "nohash")
+            SHORT_COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
+            release_tag=$(git describe --tags --abbrev=0 "$FULL_COMMIT_HASH" 2>/dev/null || echo "notag")
+            
+            if [[ "$release_tag" != "notag" && "$SHORT_COMMIT_HASH" != "nohash" ]]; then
+              suki_version_actual="${release_tag}-${SHORT_COMMIT_HASH}@${TECHNICAL_BRANCH}"
+              job_suffix_text=" (预期SukiSU ${suki_version_actual})"
+            else
+              suki_version_actual="计算错误 - tag: ${release_tag}, hash: ${SHORT_COMMIT_HASH}"
+              job_suffix_text=" (SukiSU - 版本预计算失败)"
+            fi
+            cd .. && rm -rf SukiSU_temp_for_version
+          else
+            suki_version_actual="克隆错误"
+            job_suffix_text=" (SukiSU - 预克隆失败)"
+          fi
+          
+          echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
+          echo "suki_version_actual=${suki_version_actual}" >> $GITHUB_OUTPUT
+
   build_kernel:
-    name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}
+    name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}${{ needs.precheck_sukisu_version.outputs.job_name_suffix }}
+    needs: precheck_sukisu_version
     runs-on: ubuntu-latest
     outputs:
       artifact_name: ${{ steps.generate_release_info.outputs.artifact_name_for_release }}
@@ -101,7 +158,8 @@ jobs:
       current_build_date_formatted_output: ${{ steps.generate_suffixes.outputs.current_build_date_formatted_for_release_body }}
       parsed_kernel_version_output: ${{ steps.parse_kernel.outputs.parsed_kernel_version }}
       parsed_sub_level_output: ${{ steps.parse_kernel.outputs.parsed_sub_level }}
-      sukisu_version_from_source: ${{ steps.extract_version.outputs.final_suki_version }}
+      # 修复点: 直接使用 precheck 的输出
+      sukisu_version_from_source: ${{ needs.precheck_sukisu_version.outputs.sukisu_version_string }}
       gki_defconfig_path_output: ${{ steps.set_core_paths.outputs.gki_defconfig_path_output }}
       effective_kpm_setting: ${{ steps.kpm_settings.outputs.effective_kpm_value }}
     env:
@@ -112,6 +170,8 @@ jobs:
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json
       DEBIAN_FRONTEND: noninteractive
+      # 修复点: 直接使用 precheck 的输出
+      SUKI_VERSION_NUM: ${{ needs.precheck_sukisu_version.outputs.sukisu_version_string }}
     steps:
       - name: 验证输入参数
         run: |
@@ -120,14 +180,6 @@ jobs:
           if [[ -z "$kernel_input" ]]; then
             echo "::error::'kernel_to_build' input is empty."
             exit 1
-          fi
-      - name: 确定SukiSU技术分支
-        id: determine_branch
-        run: |
-          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
-            echo "technical_branch=susfs-1.5.8" >> "$GITHUB_OUTPUT"
-          else
-            echo "technical_branch=susfs-main" >> "$GITHUB_OUTPUT"
           fi
       - name: 解析内核参数
         id: parse_kernel
@@ -153,18 +205,12 @@ jobs:
           GKI_DEFCONFIG_FILE_PATH_VALUE="${KERNEL_SOURCE_DIRECTORY_VALUE}/common/arch/arm64/configs/gki_defconfig"
           echo "GKI_DEFCONFIG_PATH_ENV=${GKI_DEFCONFIG_FILE_PATH_VALUE}" >> $GITHUB_ENV
           echo "gki_defconfig_path_output=${GKI_DEFCONFIG_FILE_PATH_VALUE}" >> $GITHUB_OUTPUT
-      - name: 生成发布文件名后缀和日期
+      - name: 生成构建日期
         id: generate_suffixes
         run: |
           set -euo pipefail
-          current_date_yyyymmdd=$(date +%Y%m%d)
-          current_date_formatted=$(date +"%Y年%m月%d日")
-          artifact_name_suffix_part="-${current_date_yyyymmdd}"
-          if [[ -n "${{ github.event.inputs.custom_version_suffix }}" ]]; then
-            artifact_name_suffix_part="-${{ github.event.inputs.custom_version_suffix }}"
-          fi
-          echo "ARTIFACT_NAME_SUFFIX_PART=${artifact_name_suffix_part}" >> "$GITHUB_ENV"
-          echo "current_build_date_formatted_for_release_body=${current_date_formatted}" >> $GITHUB_OUTPUT
+          echo "current_build_date_formatted_for_release_body=$(date +"%Y年%m月%d日")" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE_YYYYMMDD=$(date +%Y%m%d)" >> $GITHUB_ENV
       - name: 调整KPM设置
         id: kpm_settings
         run: |
@@ -305,57 +351,10 @@ jobs:
         run: |
           set -euo pipefail
           echo "Adding SukiSU..."
-          SUKI_BRANCH_ARG="-s ${{ steps.determine_branch.outputs.technical_branch }}"
+          SUKI_BRANCH_ARG="-s ${{ needs.precheck_sukisu_version.outputs.technical_branch }}"
           echo "Using SukiSU setup argument: $SUKI_BRANCH_ARG"
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash $SUKI_BRANCH_ARG
-      
-      # 修复点: 彻底重写此步骤以确保版本号正确
-      - name: 提取SukiSU真实版本
-        id: extract_version
-        shell: bash
-        env:
-          TECHNICAL_BRANCH_NAME: ${{ steps.determine_branch.outputs.technical_branch }}
-        run: |
-          set -euo pipefail
-          SUKI_SRC_PATH="${{ env.KERNEL_SRC_ROOT }}/SukiSU"
-          if [ ! -d "$SUKI_SRC_PATH" ] && [ -d "${{ env.KERNEL_SRC_ROOT }}/KernelSU" ]; then
-            SUKI_SRC_PATH="${{ env.KERNEL_SRC_ROOT }}/KernelSU"
-          fi
-          
-          actual_suki_version="获取失败"
-          
-          if [ -d "$SUKI_SRC_PATH/.git" ]; then
-            cd "$SUKI_SRC_PATH"
-            
-            echo "正在修复 SukiSU 仓库历史记录以获取标签..."
-            # 步骤 1: 保存准确的 commit hash
-            FULL_COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "nohash")
-            SHORT_COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
-
-            if [[ "$FULL_COMMIT_HASH" != "nohash" ]]; then
-              # 步骤 2: 强制拉取所有标签和加深历史记录, 修复浅层克隆问题
-              # --unshallow 可能会在已经是完整克隆时报错, 所以我们忽略它的错误
-              git fetch --prune --unshallow --tags >/dev/null 2>&1 || echo "Unshallow a full repo, ignoring."
-              
-              # 步骤 3: 使用准确的 commit hash 精确查找标签
-              release_tag=$(git describe --tags --abbrev=0 "$FULL_COMMIT_HASH" 2>/dev/null || echo "notag")
-              
-              # 使用传入的技术分支名, 而不是 git 命令检测, 来保证版本号的准确性
-              actual_suki_version="${release_tag}-${SHORT_COMMIT_HASH}@${TECHNICAL_BRANCH_NAME}"
-            else
-              actual_suki_version="计算错误-无法获取Commit"
-            fi
-            
-            cd - >/dev/null
-          else
-            actual_suki_version="源码目录不存在"
-          fi
-          
-          echo "Actual SukiSU Version (from integrated source): $actual_suki_version"
-          
-          echo "final_suki_version=${actual_suki_version}" >> "$GITHUB_OUTPUT"
-          echo "SUKI_VERSION_NUM=${actual_suki_version}" >> "$GITHUB_ENV"
-
+      # 修复点: 此处不再需要提取版本号, 因为已由 precheck 任务完成
       - name: 应用SUSFS补丁
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         shell: bash
@@ -455,7 +454,7 @@ jobs:
           for fp in "${{ env.KERNEL_SRC_ROOT }}/common/build.config.gki" "${{ env.KERNEL_SRC_ROOT }}/common/build.config.gki.aarch64" "${{ env.KERNEL_SRC_ROOT }}/common/build.config"; do
             if [ -f "$fp" ]; then sed -i 's/check_defconfig//g' "$fp"; fi
           done
-      - name: 配置内核版本参数
+      - name: 配置内核内部版本参数
         id: configure_kernel_version
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         run: |
@@ -601,24 +600,24 @@ jobs:
           _svn="${{ env.SUKI_VERSION_NUM }}"
           _kv="${{ env.SELECTED_KERNEL_VERSION }}"
           _sl="${{ env.SELECTED_SUB_LEVEL }}"
-          _suf="${{ env.ARTIFACT_NAME_SUFFIX_PART }}"
+          _date="${{ env.BUILD_DATE_YYYYMMDD }}"
           _base="SukiSUUltra"
           _aname=""
           _tit=""
           _tag=""
           _stable_group_tag=""
-          if [[ "$_svn" != "NoVer" && "$_svn" != "" && "$_svn" != "获取失败" && "$_svn" != "计算错误" && "$_svn" != "源码目录不存在" && ! "$_svn" == notag* ]]; then
+          if [[ "$_svn" != "NoVer" && "$_svn" != "" && "$_svn" != "获取失败" && ! "$_svn" == *notag* && ! "$_svn" == *计算错误* && ! "$_svn" == *源码目录不存在* ]]; then
             _sanitized_svn=$(echo "$_svn" | sed 's/[^a-zA-Z0-9._@-]/_/g')
             _stable_group_tag="${_base}-${_sanitized_svn}"
             _tit="${_base} ${_svn}"
-            _aname="AnyKernel3_${_base}_${_sanitized_svn}_${_kv}-${_sl}${_suf}"
-            _tag="${_base}-${_sanitized_svn}_${_kv}-${_sl}${_suf:-$(date +%s)}"
+            # 修复点: 文件名不使用自定义后缀, 而是用日期
+            _aname="AnyKernel3_${_base}_${_sanitized_svn}_${_kv}-${_sl}-${_date}"
+            _tag="${_base}-${_sanitized_svn}_${_kv}-${_sl}-${_date}"
           else
             _stable_group_tag="${_base}-NoVer"
-            _asuf_for_tit_and_artifact="${_suf}"; if [[ -z "$_asuf_for_tit_and_artifact" && "${{ github.event.inputs.custom_version_suffix }}" == "" ]]; then _asuf_for_tit_and_artifact="-$(date +%Y%m%d)"; fi
-            _tit="${_base}-NoVer${_asuf_for_tit_and_artifact}"
-            _aname="AnyKernel3_${_base}_NoVer_${_kv}-${_sl}${_asuf_for_tit_and_artifact}"
-            _tag="${_base}-NoVer_${_kv}-${_sl}${_asuf_for_tit_and_artifact}"
+            _tit="${_base}-NoVer-${_date}"
+            _aname="AnyKernel3_${_base}_NoVer_${_kv}-${_sl}-${_date}"
+            _tag="${_base}-NoVer_${_kv}-${_sl}-${_date}"
           fi
           echo "artifact_name_for_release=${_aname}" >> "$GITHUB_OUTPUT"
           echo "release_tag_name=${_tag}" >> "$GITHUB_OUTPUT"
@@ -693,11 +692,11 @@ jobs:
             --------------------------------------------------
 
             **⚙️ 详细参数 ⚙️**
-            * **内核全称:**
+            * **内核内部版本 (uname -r):**
                 `${{ needs.build_kernel.outputs.parsed_kernel_version_output }}.${{ needs.build_kernel.outputs.parsed_sub_level_output }}${{ needs.build_kernel.outputs.final_kernel_local_version_output }}`
             * **构建日期:**
                 `${{ needs.build_kernel.outputs.current_build_date_formatted_output }}`
-            * **自定义后缀:**
+            * **内部版本后缀设置:**
                 `${{ github.event.inputs.custom_version_suffix == '' && '默认: -SukiSU-Ultra' || format('自定义: {0}', github.event.inputs.custom_version_suffix) }}`
 
             **🛠️ 编译特性 🛠️**
