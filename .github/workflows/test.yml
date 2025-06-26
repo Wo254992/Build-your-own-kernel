@@ -116,35 +116,36 @@ jobs:
           fi
           echo "technical_branch=${TECHNICAL_BRANCH}" >> $GITHUB_OUTPUT
           
-          echo "Pre-checking SukiSU branch: $TECHNICAL_BRANCH"
-          
-          # 修复点: 采用带回退机制的克隆方法
-          if git clone --branch "$TECHNICAL_BRANCH" --depth=50 "$SUKI_REPO_URL" SukiSU_temp_for_version >/dev/null 2>&1; then
-            echo "Direct clone of branch/tag '$TECHNICAL_BRANCH' succeeded."
-            cd SukiSU_temp_for_version
-          else
-            echo "Direct clone failed. Using fallback method..."
-            if git clone --depth=1 "$SUKI_REPO_URL" SukiSU_temp_for_version >/dev/null 2>&1; then
-              cd SukiSU_temp_for_version
-              echo "Fallback: Checking out '$TECHNICAL_BRANCH'..."
-              git fetch --depth=50 origin "$TECHNICAL_BRANCH" >/dev/null 2>&1
-              git checkout "$TECHNICAL_BRANCH" >/dev/null 2>&1
-            else
-              echo "::error::Fallback clone also failed. Repo URL might be incorrect or inaccessible."
-              suki_version_actual="克隆错误"
-              job_suffix_text=" (SukiSU - 预克隆失败)"
-              echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
-              echo "suki_version_actual=${suki_version_actual}" >> $GITHUB_OUTPUT
-              exit 1
-            fi
+          echo "Performing a FULL clone of '$SUKI_REPO_URL' to ensure git history is complete..."
+
+          # 修复点: 不带任何参数进行完整克隆, 保证历史记录完整性
+          if ! git clone "$SUKI_REPO_URL" SukiSU_temp_for_version; then
+            echo "::error::Full clone failed. Repo URL might be incorrect or inaccessible."
+            suki_version_actual="克隆错误"
+            job_suffix_text=" (SukiSU - 预克隆失败)"
+            echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
+            echo "suki_version_actual=${suki_version_actual}" >> $GITHUB_OUTPUT
+            exit 1
           fi
 
-          # 此时, 我们已成功检出所需代码
-          echo "Successfully checked out. Now describing version..."
-          git fetch --prune --unshallow --tags >/dev/null 2>&1 || echo "Unshallow a full repo, ignoring."
+          cd SukiSU_temp_for_version
+          echo "Checking out '$TECHNICAL_BRANCH' from the full clone..."
           
+          # 在完整历史的仓库中检出目标分支或标签
+          if ! git checkout "$TECHNICAL_BRANCH"; then
+            echo "::error::Failed to checkout '$TECHNICAL_BRANCH'. It may not exist in the repo."
+            suki_version_actual="检出分支或标签失败"
+            job_suffix_text=" (SukiSU - 预计算失败)"
+            echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
+            echo "suki_version_actual=${suki_version_actual}" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "Successfully checked out. Now describing version..."
+
           FULL_COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "nohash")
           SHORT_COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
+          # 在拥有完整历史的仓库中, 此命令现在必定可以成功找到标签
           release_tag=$(git describe --tags --abbrev=0 "$FULL_COMMIT_HASH" 2>/dev/null || echo "notag")
           
           if [[ "$release_tag" != "notag" && "$SHORT_COMMIT_HASH" != "nohash" ]]; then
@@ -158,7 +159,6 @@ jobs:
           echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
           echo "suki_version_actual=${suki_version_actual}" >> $GITHUB_OUTPUT
           
-          # 清理
           cd .. && rm -rf SukiSU_temp_for_version
 
   build_kernel:
@@ -619,7 +619,6 @@ jobs:
           _tit=""
           _tag=""
           _stable_group_tag=""
-          # 检查预计算的版本号是否有效
           if [[ "$_svn" != "NoVer" && "$_svn" != "" && "$_svn" != "获取失败" && ! "$_svn" == *notag* && ! "$_svn" == *计算错误* && ! "$_svn" == *克隆错误* && ! "$_svn" == *源码目录不存在* ]]; then
             _sanitized_svn=$(echo "$_svn" | sed 's/[^a-zA-Z0-9._@-]/_/g')
             _stable_group_tag="${_base}-${_sanitized_svn}"
