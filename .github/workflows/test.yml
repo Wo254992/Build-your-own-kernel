@@ -49,7 +49,6 @@ on:
           - "android14_5.15_167_2024-11_"
           - "android14_5.15_170_2025-01_"
           - "android14_6.1_75_2024-05_"
-          - "android14_6.1_118_2025-01_"
           - "android15_6.6_50_2024-10_"
           - "android15_6.6_56_2024-11_"
           - "android15_6.6_57_2024-12_"
@@ -65,9 +64,10 @@ on:
         options:
           - Stable
           - Dev
+          - Other
         default: Dev
       custom_version_suffix:
-        description: '自定义内核内部版本后缀(uname -r), 留空则使用默认值'
+        description: '自定义内核版本后缀 (留空仿官方)'
         required: false
         type: string
       use_zram:
@@ -90,13 +90,12 @@ on:
         default: 'true'
 
 jobs:
-  precheck_sukisu_version:
-    name: 预计算SukiSU版本号
+  determine_sukisu_version:
+    name: 获取SukiSU版本
     runs-on: ubuntu-latest
     outputs:
       job_name_suffix: ${{ steps.calculate_version.outputs.job_suffix }}
-      sukisu_version_string: ${{ steps.calculate_version.outputs.suki_version_actual }}
-      technical_branch: ${{ steps.calculate_version.outputs.technical_branch }}
+      sukisu_version: ${{ steps.calculate_version.outputs.suki_version_actual }}
     steps:
       - name: 安装Git
         run: |
@@ -107,68 +106,46 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          suki_version_actual="获取失败"
+          suki_version_actual_for_output="获取失败"
           job_suffix_text=""
           SUKI_REPO_URL="https://github.com/ShirkNeko/SukiSU-Ultra.git"
-          
-          TECHNICAL_BRANCH="susfs-main" # Stable
-          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
-            TECHNICAL_BRANCH="susfs-1.5.8" # Dev
-          fi
-          echo "technical_branch=${TECHNICAL_BRANCH}" >> $GITHUB_OUTPUT
-          
-          echo "Performing a FULL clone of '$SUKI_REPO_URL' to get all branch and tag info..."
-
-          if ! git clone "$SUKI_REPO_URL" SukiSU_temp_for_version; then
-            echo "::error::Full clone failed. Repo URL might be incorrect or inaccessible."
-            exit 1
-          fi
-
-          cd SukiSU_temp_for_version
-
-          # 步骤 1: 从主分支获取最新的 release tag
-          DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
-          echo "Default branch is: $DEFAULT_BRANCH"
-          release_tag=$(git describe --tags --abbrev=0 "origin/$DEFAULT_BRANCH" 2>/dev/null || echo "notag")
-          echo "Latest release tag from '$DEFAULT_BRANCH' is: $release_tag"
-
-          # 步骤 2: 切换到目标开发分支, 获取其 commit hash
-          echo "Checking out '$TECHNICAL_BRANCH' to get its specific commit hash..."
-          if ! git checkout "$TECHNICAL_BRANCH"; then
-            echo "::error::Failed to checkout '$TECHNICAL_BRANCH'. It may not exist in the repo."
-            exit 1
-          fi
-          SHORT_COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
-          echo "Commit hash from '$TECHNICAL_BRANCH' is: $SHORT_COMMIT_HASH"
-          
-          # 步骤 3: 拼接成最终版本号
-          if [[ "$release_tag" != "notag" && "$SHORT_COMMIT_HASH" != "nohash" ]]; then
-            suki_version_actual="${release_tag}-${SHORT_COMMIT_HASH}@${TECHNICAL_BRANCH}"
-            job_suffix_text=" (预期SukiSU ${suki_version_actual})"
+          CLONE_BRANCH="main"
+          echo "Attempting to clone SukiSU from $SUKI_REPO_URL branch $CLONE_BRANCH..."
+          if git clone --branch "$CLONE_BRANCH" --single-branch "$SUKI_REPO_URL" SukiSU_temp_for_version; then
+            cd SukiSU_temp_for_version
+            commit_count=$(git rev-list --count HEAD 2>/dev/null || echo "err_count")
+            if [[ "$commit_count" != "err_count" && "$commit_count" =~ ^[0-9]+$ ]]; then
+              calculated_version=$((commit_count + 10606))
+              suki_version_actual_for_output=$calculated_version
+              job_suffix_text=" (SukiSU $calculated_version)"
+            else
+              suki_version_actual_for_output="计算错误"
+              job_suffix_text=" (SukiSU - 版本计算失败)"
+              echo "::warning::Failed to calculate SukiSU commit count. Git count output: $commit_count"
+            fi
+            cd .. && rm -rf SukiSU_temp_for_version
           else
-            suki_version_actual="计算错误 - tag: ${release_tag}, hash: ${SHORT_COMMIT_HASH}"
-            job_suffix_text=" (SukiSU - 版本预计算失败)"
+            suki_version_actual_for_output="克隆错误"
+            job_suffix_text=" (SukiSU - 克隆失败)"
+            echo "::error::Failed to clone SukiSU repository."
           fi
-          
           echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
-          echo "suki_version_actual=${suki_version_actual}" >> $GITHUB_OUTPUT
-          
-          cd .. && rm -rf SukiSU_temp_for_version
+          echo "suki_version_actual=${suki_version_actual_for_output}" >> $GITHUB_OUTPUT
 
   build_kernel:
-    name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}${{ needs.precheck_sukisu_version.outputs.job_name_suffix }}
-    needs: precheck_sukisu_version
+    name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}${{ needs.determine_sukisu_version.outputs.job_name_suffix }}
+    needs: determine_sukisu_version
     runs-on: ubuntu-latest
     outputs:
-      artifact_name: ${{ steps.generate_release_info.outputs.artifact_name_for_release }}
-      release_tag: ${{ steps.generate_release_info.outputs.release_tag_name }}
-      release_title: ${{ steps.generate_release_info.outputs.release_title_name }}
-      stable_release_tag_for_action: ${{ steps.generate_release_info.outputs.stable_release_tag_for_action }}
-      final_kernel_local_version_output: ${{ steps.configure_kernel_version.outputs.final_kernel_local_version_for_release_body }}
+      artifact_name: ${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}
+      release_tag: ${{ steps.prepare_release_outputs.outputs.release_tag_name }}
+      release_title: ${{ steps.prepare_release_outputs.outputs.release_title_name }}
+      stable_release_tag_for_action: ${{ steps.prepare_release_outputs.outputs.stable_release_tag_for_action }}
+      final_kernel_local_version_output: ${{ steps.generate_suffixes.outputs.final_kernel_local_version_for_release_body }}
       current_build_date_formatted_output: ${{ steps.generate_suffixes.outputs.current_build_date_formatted_for_release_body }}
       parsed_kernel_version_output: ${{ steps.parse_kernel.outputs.parsed_kernel_version }}
       parsed_sub_level_output: ${{ steps.parse_kernel.outputs.parsed_sub_level }}
-      sukisu_version_from_source: ${{ needs.precheck_sukisu_version.outputs.sukisu_version_string }}
+      sukisu_version_from_build_job: ${{ needs.determine_sukisu_version.outputs.sukisu_version }}
       gki_defconfig_path_output: ${{ steps.set_core_paths.outputs.gki_defconfig_path_output }}
       effective_kpm_setting: ${{ steps.kpm_settings.outputs.effective_kpm_value }}
     env:
@@ -179,7 +156,6 @@ jobs:
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json
       DEBIAN_FRONTEND: noninteractive
-      SUKI_VERSION_NUM: ${{ needs.precheck_sukisu_version.outputs.sukisu_version_string }}
     steps:
       - name: 验证输入参数
         run: |
@@ -213,12 +189,41 @@ jobs:
           GKI_DEFCONFIG_FILE_PATH_VALUE="${KERNEL_SOURCE_DIRECTORY_VALUE}/common/arch/arm64/configs/gki_defconfig"
           echo "GKI_DEFCONFIG_PATH_ENV=${GKI_DEFCONFIG_FILE_PATH_VALUE}" >> $GITHUB_ENV
           echo "gki_defconfig_path_output=${GKI_DEFCONFIG_FILE_PATH_VALUE}" >> $GITHUB_OUTPUT
-      - name: 生成构建日期
+      - name: 生成版本后缀和日期
         id: generate_suffixes
+        env:
+          USER_PROVIDED_SUFFIX: ${{ github.event.inputs.custom_version_suffix }}
+          SELECTED_AV_ENV: ${{ env.SELECTED_ANDROID_VERSION }}
+          SELECTED_KV_ENV: ${{ env.SELECTED_KERNEL_VERSION }}
         run: |
           set -euo pipefail
-          echo "current_build_date_formatted_for_release_body=$(date +"%Y年%m月%d日")" >> $GITHUB_OUTPUT
-          echo "BUILD_DATE_YYYYMMDD=$(date +%Y%m%d)" >> $GITHUB_ENV
+          final_kernel_local_version=""
+          artifact_name_suffix_part=""
+          current_date_yyyymmdd=$(date +%Y%m%d)
+          current_date_formatted=$(date +"%Y年%m月%d日")
+          if [[ -n "$USER_PROVIDED_SUFFIX" ]]; then
+            final_kernel_local_version="$USER_PROVIDED_SUFFIX"
+            artifact_name_suffix_part="$USER_PROVIDED_SUFFIX"
+            echo "Using user-provided suffix: $final_kernel_local_version"
+          else
+            kernel_fixed_part_for_localversion=""
+            if [ "$SELECTED_AV_ENV" == "android12" ] && [ "$SELECTED_KV_ENV" == "5.10" ]; then kernel_fixed_part_for_localversion="-android12-9"
+            elif [ "$SELECTED_AV_ENV" == "android13" ] && [ "$SELECTED_KV_ENV" == "5.10" ]; then kernel_fixed_part_for_localversion="-android13-9"
+            elif [ "$SELECTED_AV_ENV" == "android13" ] && [ "$SELECTED_KV_ENV" == "5.15" ]; then kernel_fixed_part_for_localversion="-android13-8"
+            elif [ "$SELECTED_AV_ENV" == "android14" ] && [ "$SELECTED_KV_ENV" == "6.1" ]; then kernel_fixed_part_for_localversion="-android14-11"
+            elif [ "$SELECTED_AV_ENV" == "android15" ] && [ "$SELECTED_KV_ENV" == "6.6" ]; then kernel_fixed_part_for_localversion="-android15-8"
+            else kernel_fixed_part_for_localversion="-${SELECTED_AV_ENV}-${SELECTED_KV_ENV//./_}-custom"; fi
+            
+            random_hex_11=$(head /dev/urandom | LC_ALL=C tr -dc 'a-f0-9' | head -c 11 || echo "randhex")
+            random_digits_8=$(head /dev/urandom | LC_ALL=C tr -dc '0-9' | head -c 8 || echo "randdig")
+            final_kernel_local_version="${kernel_fixed_part_for_localversion}-gd${random_hex_11}-ab${random_digits_8}"
+            artifact_name_suffix_part="-${current_date_yyyymmdd}"
+            echo "Generated pseudo-official suffix: $final_kernel_local_version"
+          fi
+          echo "FINAL_KERNEL_LOCAL_VERSION=${final_kernel_local_version}" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME_SUFFIX_PART=${artifact_name_suffix_part}" >> "$GITHUB_ENV"
+          echo "final_kernel_local_version_for_release_body=${final_kernel_local_version}" >> $GITHUB_OUTPUT
+          echo "current_build_date_formatted_for_release_body=${current_date_formatted}" >> $GITHUB_OUTPUT
       - name: 调整KPM设置
         id: kpm_settings
         run: |
@@ -313,9 +318,13 @@ jobs:
         run: |
           set -euo pipefail
           ANYKERNEL_BRANCH="gki-2.0"
-          SUSFS_BRANCH="gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
+          SUSFS_BRANCH_SPECIFIC="gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
+          SUSFS_BRANCH_FALLBACK="main"
           git clone https://github.com/WildPlusKernel/AnyKernel3.git -b "$ANYKERNEL_BRANCH" AnyKernel3
-          git clone https://github.com/ShirkNeko/susfs4ksu.git -b "$SUSFS_BRANCH" susfs4ksu
+          if ! git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH_SPECIFIC" susfs4ksu; then
+            echo "Failed to clone susfs4ksu with branch $SUSFS_BRANCH_SPECIFIC, trying fallback: $SUSFS_BRANCH_FALLBACK"
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH_FALLBACK" susfs4ksu
+          fi
           git clone https://github.com/WildPlusKernel/kernel_patches.git kernel_patches
           git clone https://github.com/ShirkNeko/SukiSU_patch.git SukiSU_patch
       - name: 同步内核源码
@@ -336,6 +345,7 @@ jobs:
             else
               _MANIFEST_BRANCH="${_MANIFEST_BRANCH_BASE}"
             fi
+            echo "Using manifest branch: $_MANIFEST_BRANCH"
             ${{ env.REPO }} init --depth=1 -u https://android.googlesource.com/kernel/manifest -b $_MANIFEST_BRANCH --repo-rev=v2.16
             DEFAULT_MANIFEST_PATH=".repo/manifests/default.xml"
             if [ ! -f "$DEFAULT_MANIFEST_PATH" ] && [ -f .repo/manifest.xml ]; then
@@ -350,29 +360,54 @@ jobs:
             fi
             REMOTE_COMMON_BRANCH_STATUS=$(git ls-remote https://android.googlesource.com/kernel/common "$COMMON_PROJECT_REVISION_IN_MANIFEST")
             if echo "$REMOTE_COMMON_BRANCH_STATUS" | grep -q "refs/heads/deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST"; then
+              echo "Adjusting manifest for deprecated common branch: $COMMON_PROJECT_REVISION_IN_MANIFEST"
               sed -i "/project path=\"common\"/s|revision=\"$COMMON_PROJECT_REVISION_IN_MANIFEST\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST\"|" "$DEFAULT_MANIFEST_PATH" || \
               sed -i "/project path=\"kernel\/common\"/s|revision=\"$COMMON_PROJECT_REVISION_IN_MANIFEST\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST\"|" "$DEFAULT_MANIFEST_PATH"
             fi
             ${{ env.REPO }} --trace sync -c -j$(nproc --all) --no-tags --fail-fast --current-branch
-      - name: 集成SukiSU (KernelSU)
-        working-directory: ${{ env.KERNEL_SRC_ROOT }}
+      - name: 设置SukiSU分支参数
         run: |
           set -euo pipefail
-          echo "Adding SukiSU..."
-          SUKI_BRANCH_ARG="-s ${{ needs.precheck_sukisu_version.outputs.technical_branch }}"
-          echo "Using SukiSU setup argument: $SUKI_BRANCH_ARG"
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash $SUKI_BRANCH_ARG
+          KSU_SETUP_BRANCH_ARG=""
+          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Stable" ]]; then
+            KSU_SETUP_BRANCH_ARG=""
+          elif [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
+            KSU_SETUP_BRANCH_ARG="susfs-dev"
+          elif [[ "${{ github.event.inputs.kernelsu_branch }}" == "Other" ]]; then
+            KSU_SETUP_BRANCH_ARG=""
+          fi
+          echo "KSU_BRANCH_ARG=${KSU_SETUP_BRANCH_ARG}" >> $GITHUB_ENV
+      - name: 集成SukiSU
+        run: |
+          set -euo pipefail
+          cd "${{ env.KERNEL_SRC_ROOT }}"
+          echo "Integrating SukiSU with args: '${{ env.KSU_BRANCH_ARG }}'"
+          if [[ -n "${{ env.KSU_BRANCH_ARG }}" ]]; then
+            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash -s -- ${{ env.KSU_BRANCH_ARG }}
+          else
+            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU-Ultra/main/kernel/setup.sh" | bash
+          fi
+      - name: 设置SukiSU版本号
+        shell: bash
+        run: |
+          set -euo pipefail
+          final_suki_version_num_for_env="${{ needs.determine_sukisu_version.outputs.sukisu_version }}"
+          if [[ "$final_suki_version_num_for_env" =~ ^[0-9]+$ ]]; then
+            echo "SUKI_VERSION_NUM=$final_suki_version_num_for_env" >> $GITHUB_ENV
+          else
+            echo "SUKI_VERSION_NUM=NoVer" >> $GITHUB_ENV
+            echo "::warning::Invalid SukiSU version ('$final_suki_version_num_for_env'). Using 'NoVer'."
+          fi
       - name: 应用SUSFS补丁
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         shell: bash
         run: |
-          set -euo pipefail
-          echo "Applying SUSFS patches..."
+          mkdir -p ./common/fs ./common/include/linux
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch ./common/
           cp -r ../susfs4ksu/kernel_patches/fs/* ./common/fs/
           cp -r ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
           cd ./common
-          patch -p1 --fuzz=3 < 50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch || { echo "::error::SUSFS common patch failed."; exit 1; }
+          patch -p1 --fuzz=3 < 50_add_susfs_in_gki-${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}.patch || true
           cd - >/dev/null
       - name: 应用内核补丁
         shell: bash
@@ -461,40 +496,39 @@ jobs:
           for fp in "${{ env.KERNEL_SRC_ROOT }}/common/build.config.gki" "${{ env.KERNEL_SRC_ROOT }}/common/build.config.gki.aarch64" "${{ env.KERNEL_SRC_ROOT }}/common/build.config"; do
             if [ -f "$fp" ]; then sed -i 's/check_defconfig//g' "$fp"; fi
           done
-      - name: 配置内核内部版本参数
-        id: configure_kernel_version
+      - name: 配置内核版本参数
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         run: |
           set -euo pipefail
-          FINAL_VERSION_SUFFIX=""
-          if [[ -n "${{ github.event.inputs.custom_version_suffix }}" ]]; then
-            echo "版本号不为空，使用自定义后缀: ${{ github.event.inputs.custom_version_suffix }}"
-            FINAL_VERSION_SUFFIX="${{ github.event.inputs.custom_version_suffix }}"
-            # 修复：总是附加后缀，而不是替换整个版本字符串
-            sed -i 's|echo "$res"|echo "$res${{ github.event.inputs.custom_version_suffix }}"|' ./common/scripts/setlocalversion
-          else
-            echo "版本号为空，使用默认后缀"
-            FINAL_VERSION_SUFFIX="-SukiSU-Ultra"
-          fi
+          GKI_DEFCONFIG="${{ env.GKI_DEFCONFIG_PATH_ENV }}"
+          SLS="./common/scripts/setlocalversion"
           
-          echo "final_kernel_local_version_for_release_body=${FINAL_VERSION_SUFFIX}" >> $GITHUB_OUTPUT
-
-          CURRENT_TIME=$(date -u +"%a %b %d %H:%M:%S UTC %Y")
-          echo "Setting build time to: $CURRENT_TIME"
-          perl -pi -e "s{UTS_VERSION=\"\\\$\(echo \\\$UTS_VERSION \\\$CONFIG_FLAGS \\\$TIMESTAMP \\| cut -b -\\\$UTS_LEN\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $CURRENT_TIME\"}" ./common/scripts/mkcompile_h
-
-          if [ "${{ env.SELECTED_KERNEL_VERSION }}" = "6.1" ] || [ "${{ env.SELECTED_KERNEL_VERSION }}" = "6.6" ]; then
-            sed -i -e "s|\$(preempt-flag-y) \"\$(build-timestamp)\"|\$(preempt-flag-y) \"$CURRENT_TIME\"|" ./common/init/Makefile
+          # 清理defconfig中的版本设置，防止内核自身逻辑和我们的强制设定冲突
+          if [ -f "$GKI_DEFCONFIG" ]; then
+            sed -i '/^CONFIG_LOCALVERSION=/d' "$GKI_DEFCONFIG"
+            echo 'CONFIG_LOCALVERSION=""' >> "$GKI_DEFCONFIG"
+            sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$GKI_DEFCONFIG"
+            echo '# CONFIG_LOCALVERSION_AUTO is not set' >> "$GKI_DEFCONFIG"
+            sort -u "$GKI_DEFCONFIG" -o "$GKI_DEFCONFIG"
           fi
-          
-          if [ -f "build/build.sh" ]; then
-            sed -i 's/-dirty//' ./common/scripts/setlocalversion
-          else
-            sed -i 's/-dirty//' ./common/scripts/setlocalversion
-            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' ./common/BUILD.bazel
-            rm -rf ./common/android/abi_gki_protected_exports_*
-            sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
-            # 修复：删除此处对 gki_defconfig 的重复修改，避免版本号重复
+
+          # 强制覆盖setlocalversion脚本，让它只输出我们生成的版本号
+          if [ -f "$SLS" ]; then
+            if [[ -n "${{ env.FINAL_KERNEL_LOCAL_VERSION }}" ]]; then
+              echo '#!/bin/sh' > "$SLS"
+              echo 'echo "${{ env.FINAL_KERNEL_LOCAL_VERSION }}"' >> "$SLS"
+              chmod +x "$SLS"
+            else
+              # 如果没有生成版本号（理论上不应发生），则只清理-dirty标记以防万一
+              sed -i 's/-dirty//g' "$SLS"
+            fi
+          fi
+
+          # 清理Bazel构建产生的-dirty标记
+          if [ ! -f "./build/build.sh" ]; then
+            if [ -f "./common/BUILD.bazel" ]; then sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' "./common/BUILD.bazel"; fi
+            find ./common/android/ -name "abi_gki_protected_exports_*" -delete
+            if [ -f "./build/kernel/kleaf/impl/stamp.bzl" ]; then sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" "./build/kernel/kleaf/impl/stamp.bzl"; fi
           fi
       - name: 校验关键内核配置
         run: |
@@ -544,7 +578,7 @@ jobs:
             fi
             if [ "$BAZEL_WAS_USED" = "true" ]; then
               if [ ! -f "${BAZEL_PROFILE_PATH_IN_WORKSPACE}" ]; then
-                echo "::warning::Bazel profile file was expected (Bazel build path taken) but not found at ${BAZEL_PROFILE_PATH_IN_WORKSPACE}."
+                echo "::warning::Bazel profile file was expected but not found at ${BAZEL_PROFILE_PATH_IN_WORKSPACE}."
               fi
             fi
       - name: KPM修补 (Android 12/13)
@@ -582,12 +616,13 @@ jobs:
           elif [ -f "$BZL_IMG1" ]; then IMG_SRC="$BZL_IMG1"
           elif [ -f "$BZL_IMG2" ]; then IMG_SRC="$BZL_IMG2"
           else
+            echo "::error::Compiled Image not found."
             ls -R "${{ env.KERNEL_SRC_ROOT }}/out/" || true
             ls -R "${{ env.KERNEL_SRC_ROOT }}/bazel-bin/" || true
             exit 1
           fi
           AK3_DIR="$GITHUB_WORKSPACE/AnyKernel3"
-          if [ ! -d "$AK3_DIR" ]; then exit 1; fi
+          if [ ! -d "$AK3_DIR" ]; then echo "::error::AnyKernel3 dir not found."; exit 1; fi
           cp "$IMG_SRC" "$AK3_DIR/Image"
       - name: 验证内核镜像类型
         run: |
@@ -598,40 +633,43 @@ jobs:
           if ! (echo "$file_out" | grep -q "ARM64" && echo "$file_out" | grep -q "Linux kernel"); then
             exit 1
           fi
-      - name: 生成发布信息和文件名
-        id: generate_release_info
+      - name: 准备 Release 信息
+        id: prepare_release_outputs
         shell: bash
         run: |
           set -euo pipefail
           _svn="${{ env.SUKI_VERSION_NUM }}"
           _kv="${{ env.SELECTED_KERNEL_VERSION }}"
           _sl="${{ env.SELECTED_SUB_LEVEL }}"
-          _date="${{ env.BUILD_DATE_YYYYMMDD }}"
+          _suf="${{ env.ARTIFACT_NAME_SUFFIX_PART }}"
           _base="SukiSUUltra"
           _aname=""
           _tit=""
           _tag=""
           _stable_group_tag=""
-          if [[ "$_svn" != "NoVer" && "$_svn" != "" && "$_svn" != "获取失败" && ! "$_svn" == *notag* && ! "$_svn" == *计算错误* && ! "$_svn" == *克隆错误* && ! "$_svn" == *源码目录不存在* ]]; then
-            _sanitized_svn=$(echo "$_svn" | sed 's/[^a-zA-Z0-9._@-]/_/g')
-            _stable_group_tag="${_base}-${_sanitized_svn}"
-            _tit="${_base} ${_svn}"
-            _aname="AnyKernel3_${_base}_${_sanitized_svn}_${_kv}-${_sl}-${_date}"
-            _tag="${_base}-${_sanitized_svn}_${_kv}-${_sl}-${_date}"
+
+          if [[ "$_svn" != "NoVer" && "$_svn" =~ ^[0-9]+$ && "$_svn" != "00000" && "$_svn" != "10000" ]]; then
+            _stable_group_tag="${_base}-${_svn}"
+            _tit="${_base}-${_svn}"
+            _aname="AnyKernel3_${_base}_${_svn}_${_kv}-${_sl}${_suf}"
+            _tag="${_base}-${_svn}_${_kv}-${_sl}${_suf:-$(date +%s)}"
           else
             _stable_group_tag="${_base}-NoVer"
-            _tit="${_base}-NoVer-${_date}"
-            _aname="AnyKernel3_${_base}_NoVer_${_kv}-${_sl}-${_date}"
-            _tag="${_base}-NoVer_${_kv}-${_sl}-${_date}"
+            _asuf_for_tit_and_artifact="${_suf}"; if [[ -z "$_asuf_for_tit_and_artifact" && "${{ github.event.inputs.custom_version_suffix }}" == "" ]]; then _asuf_for_tit_and_artifact="-$(date +%Y%m%d)"; fi
+            _tit="${_base}-NoVer${_asuf_for_tit_and_artifact}"
+            _aname="AnyKernel3_${_base}_NoVer_${_kv}-${_sl}${_asuf_for_tit_and_artifact}"
+            _tag="${_base}-NoVer_${_kv}-${_sl}${_asuf_for_tit_and_artifact}"
           fi
-          echo "artifact_name_for_release=${_aname}" >> "$GITHUB_OUTPUT"
-          echo "release_tag_name=${_tag}" >> "$GITHUB_OUTPUT"
+
+          sanitize() { echo "$1" | sed 's/[^a-zA-Z0-9._\-\(\)]/-/g'; }
+          echo "artifact_name_for_release=$(sanitize "$_aname")" >> "$GITHUB_OUTPUT"
+          echo "release_tag_name=$(sanitize "$_tag")" >> "$GITHUB_OUTPUT"
           echo "release_title_name=${_tit}" >> "$GITHUB_OUTPUT"
-          echo "stable_release_tag_for_action=${_stable_group_tag}" >> "$GITHUB_OUTPUT"
+          echo "stable_release_tag_for_action=$(sanitize "$_stable_group_tag")" >> "$GITHUB_OUTPUT"
       - name: 上传内核刷机包 Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.generate_release_info.outputs.artifact_name_for_release }}
+          name: ${{ steps.prepare_release_outputs.outputs.artifact_name_for_release }}
           path: ${{ github.workspace }}/AnyKernel3
           if-no-files-found: error
       - name: 清理构建空间
@@ -675,10 +713,10 @@ jobs:
           set -euo pipefail
           cd downloaded_artifact
           final_zip="${{ needs.build_kernel.outputs.artifact_name }}.zip"
-          if [ -z "$(ls -A .)" ]; then exit 1; fi
+          if [ -z "$(ls -A .)" ]; then echo "::error::Downloaded artifact directory is empty."; exit 1; fi
           zip -r9 "../${final_zip}" .
           cd ..
-          if [ ! -f "${final_zip}" ]; then exit 1; fi
+          if [ ! -f "${final_zip}" ]; then echo "::error::Failed to create zip package."; exit 1; fi
           echo "packaged_zip=${final_zip}" >> $GITHUB_OUTPUT
       - name: 创建或更新 Release
         uses: ncipollo/release-action@v1
@@ -691,18 +729,18 @@ jobs:
 
             --------------------------------------------------
             **🔥 主要信息 🔥**
-            * **SukiSU 版本:** `${{ needs.build_kernel.outputs.sukisu_version_from_source }}`
+            * **SukiSU 版本:** `${{ needs.build_kernel.outputs.sukisu_version_from_build_job }}`
             * **基于内核:** `${{ github.event.inputs.kernel_to_build }}`
             * **功能分支:** `${{ github.event.inputs.kernelsu_branch }}`
             --------------------------------------------------
 
             **⚙️ 详细参数 ⚙️**
-            * **内核内部版本 (uname -r):**
+            * **内核全称 (uname -r):**
                 `${{ needs.build_kernel.outputs.parsed_kernel_version_output }}.${{ needs.build_kernel.outputs.parsed_sub_level_output }}${{ needs.build_kernel.outputs.final_kernel_local_version_output }}`
             * **构建日期:**
                 `${{ needs.build_kernel.outputs.current_build_date_formatted_output }}`
-            * **内部版本后缀设置:**
-                `${{ github.event.inputs.custom_version_suffix == '' && '默认: -SukiSU-Ultra' || format('自定义: {0}', github.event.inputs.custom_version_suffix) }}`
+            * **自定义后缀:**
+                `${{ github.event.inputs.custom_version_suffix == '' && '仿官方随机生成' || format('自定义: {0}', github.event.inputs.custom_version_suffix) }}`
 
             **🛠️ 编译特性 🛠️**
             * ✅ **ZRAM:** `${{ github.event.inputs.use_zram }}`
