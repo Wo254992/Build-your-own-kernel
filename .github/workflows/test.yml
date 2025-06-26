@@ -116,38 +116,31 @@ jobs:
           fi
           echo "technical_branch=${TECHNICAL_BRANCH}" >> $GITHUB_OUTPUT
           
-          echo "Performing a FULL clone of '$SUKI_REPO_URL' to ensure git history is complete..."
+          echo "Performing a FULL clone of '$SUKI_REPO_URL' to get all branch and tag info..."
 
-          # 修复点: 不带任何参数进行完整克隆, 保证历史记录完整性
           if ! git clone "$SUKI_REPO_URL" SukiSU_temp_for_version; then
             echo "::error::Full clone failed. Repo URL might be incorrect or inaccessible."
-            suki_version_actual="克隆错误"
-            job_suffix_text=" (SukiSU - 预克隆失败)"
-            echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
-            echo "suki_version_actual=${suki_version_actual}" >> $GITHUB_OUTPUT
             exit 1
           fi
 
           cd SukiSU_temp_for_version
-          echo "Checking out '$TECHNICAL_BRANCH' from the full clone..."
-          
-          # 在完整历史的仓库中检出目标分支或标签
+
+          # 步骤 1: 从主分支获取最新的 release tag
+          DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
+          echo "Default branch is: $DEFAULT_BRANCH"
+          release_tag=$(git describe --tags --abbrev=0 "origin/$DEFAULT_BRANCH" 2>/dev/null || echo "notag")
+          echo "Latest release tag from '$DEFAULT_BRANCH' is: $release_tag"
+
+          # 步骤 2: 切换到目标开发分支, 获取其 commit hash
+          echo "Checking out '$TECHNICAL_BRANCH' to get its specific commit hash..."
           if ! git checkout "$TECHNICAL_BRANCH"; then
             echo "::error::Failed to checkout '$TECHNICAL_BRANCH'. It may not exist in the repo."
-            suki_version_actual="检出分支或标签失败"
-            job_suffix_text=" (SukiSU - 预计算失败)"
-            echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
-            echo "suki_version_actual=${suki_version_actual}" >> $GITHUB_OUTPUT
             exit 1
           fi
-
-          echo "Successfully checked out. Now describing version..."
-
-          FULL_COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || echo "nohash")
           SHORT_COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
-          # 在拥有完整历史的仓库中, 此命令现在必定可以成功找到标签
-          release_tag=$(git describe --tags --abbrev=0 "$FULL_COMMIT_HASH" 2>/dev/null || echo "notag")
+          echo "Commit hash from '$TECHNICAL_BRANCH' is: $SHORT_COMMIT_HASH"
           
+          # 步骤 3: 拼接成最终版本号
           if [[ "$release_tag" != "notag" && "$SHORT_COMMIT_HASH" != "nohash" ]]; then
             suki_version_actual="${release_tag}-${SHORT_COMMIT_HASH}@${TECHNICAL_BRANCH}"
             job_suffix_text=" (预期SukiSU ${suki_version_actual})"
