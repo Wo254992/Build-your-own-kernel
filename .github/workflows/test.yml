@@ -90,74 +90,8 @@ on:
         default: 'true'
 
 jobs:
-  precheck_sukisu_version:
-    name: 预计算SukiSU版本号
-    runs-on: ubuntu-latest
-    outputs:
-      job_name_suffix: ${{ steps.calculate_version.outputs.job_suffix }}
-      sukisu_version_string: ${{ steps.calculate_version.outputs.suki_version_actual }}
-      technical_branch: ${{ steps.calculate_version.outputs.technical_branch }}
-    steps:
-      - name: 安装Git
-        run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends git
-      - name: 计算SukiSU版本号
-        id: calculate_version
-        shell: bash
-        run: |
-          set -euo pipefail
-          suki_version_actual="获取失败"
-          job_suffix_text=""
-          SUKI_REPO_URL="https://github.com/ShirkNeko/SukiSU-Ultra.git"
-          
-          TECHNICAL_BRANCH="susfs-main" # Stable
-          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
-            TECHNICAL_BRANCH="susfs-1.5.8" # Dev
-          fi
-          echo "technical_branch=${TECHNICAL_BRANCH}" >> $GITHUB_OUTPUT
-          
-          echo "Performing a FULL clone of '$SUKI_REPO_URL' to get all branch and tag info..."
-
-          if ! git clone "$SUKI_REPO_URL" SukiSU_temp_for_version; then
-            echo "::error::Full clone failed. Repo URL might be incorrect or inaccessible."
-            exit 1
-          fi
-
-          cd SukiSU_temp_for_version
-
-          # 步骤 1: 从主分支获取最新的 release tag
-          DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
-          echo "Default branch is: $DEFAULT_BRANCH"
-          release_tag=$(git describe --tags --abbrev=0 "origin/$DEFAULT_BRANCH" 2>/dev/null || echo "notag")
-          echo "Latest release tag from '$DEFAULT_BRANCH' is: $release_tag"
-
-          # 步骤 2: 切换到目标开发分支, 获取其 commit hash
-          echo "Checking out '$TECHNICAL_BRANCH' to get its specific commit hash..."
-          if ! git checkout "$TECHNICAL_BRANCH"; then
-            echo "::error::Failed to checkout '$TECHNICAL_BRANCH'. It may not exist in the repo."
-            exit 1
-          fi
-          SHORT_COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "nohash")
-          echo "Commit hash from '$TECHNICAL_BRANCH' is: $SHORT_COMMIT_HASH"
-          
-          # 步骤 3: 拼接成最终版本号
-          if [[ "$release_tag" != "notag" && "$SHORT_COMMIT_HASH" != "nohash" ]]; then
-            suki_version_actual="${release_tag}-${SHORT_COMMIT_HASH}@${TECHNICAL_BRANCH}"
-            job_suffix_text=" (预期SukiSU ${suki_version_actual})"
-          else
-            suki_version_actual="计算错误 - tag: ${release_tag}, hash: ${SHORT_COMMIT_HASH}"
-            job_suffix_text=" (SukiSU - 版本预计算失败)"
-          fi
-          
-          echo "job_suffix=${job_suffix_text}" >> $GITHUB_OUTPUT
-          echo "suki_version_actual=${suki_version_actual}" >> $GITHUB_OUTPUT
-          
-          cd .. && rm -rf SukiSU_temp_for_version
-
   build_kernel:
-    name: 内核编译 - ${{ github.event.inputs.kernel_to_build }}${{ needs.precheck_sukisu_version.outputs.job_name_suffix }}
-    needs: precheck_sukisu_version
+    name: 内核编译 - ${{ github.event.inputs.kernel_to_build }} (SukiSU ${{ github.event.inputs.kernelsu_branch }})
     runs-on: ubuntu-latest
     outputs:
       artifact_name: ${{ steps.generate_release_info.outputs.artifact_name_for_release }}
@@ -168,7 +102,7 @@ jobs:
       current_build_date_formatted_output: ${{ steps.generate_suffixes.outputs.current_build_date_formatted_for_release_body }}
       parsed_kernel_version_output: ${{ steps.parse_kernel.outputs.parsed_kernel_version }}
       parsed_sub_level_output: ${{ steps.parse_kernel.outputs.parsed_sub_level }}
-      sukisu_version_from_source: ${{ needs.precheck_sukisu_version.outputs.sukisu_version_string }}
+      sukisu_version_from_source: ${{ steps.get_sukisu_version.outputs.sukisu_version_string }}
       gki_defconfig_path_output: ${{ steps.set_core_paths.outputs.gki_defconfig_path_output }}
       effective_kpm_setting: ${{ steps.kpm_settings.outputs.effective_kpm_value }}
     env:
@@ -179,7 +113,6 @@ jobs:
       CCACHE_LOGFILE: /tmp/ccache.log
       BAZEL_PROFILE_FILENAME: bazel_profile.json
       DEBIAN_FRONTEND: noninteractive
-      SUKI_VERSION_NUM: ${{ needs.precheck_sukisu_version.outputs.sukisu_version_string }}
     steps:
       - name: 验证输入参数
         run: |
@@ -348,14 +281,45 @@ jobs:
               sed -i "/project path=\"kernel\/common\"/s|revision=\"$COMMON_PROJECT_REVISION_IN_MANIFEST\"|revision=\"deprecated/$COMMON_PROJECT_REVISION_IN_MANIFEST\"|" "$DEFAULT_MANIFEST_PATH"
             fi
             ${{ env.REPO }} --trace sync -c -j$(nproc --all) --no-tags --fail-fast --current-branch
+
       - name: 集成SukiSU (KernelSU)
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         run: |
           set -euo pipefail
           echo "Adding SukiSU..."
-          SUKI_BRANCH_ARG="-s ${{ needs.precheck_sukisu_version.outputs.technical_branch }}"
+          
+          SUKI_TECHNICAL_BRANCH=""
+          if [[ "${{ github.event.inputs.kernelsu_branch }}" == "Dev" ]]; then
+            # 仿照参考工作流，为SukiSU的Dev选择susfs-test分支
+            SUKI_TECHNICAL_BRANCH="susfs-test"
+          else
+            # Stable分支使用susfs-main
+            SUKI_TECHNICAL_BRANCH="susfs-main"
+          fi
+          
+          SUKI_BRANCH_ARG="-s ${SUKI_TECHNICAL_BRANCH}"
           echo "Using SukiSU setup argument: $SUKI_BRANCH_ARG"
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash $SUKI_BRANCH_ARG
+
+      - name: 获取SukiSU实际版本号
+        id: get_sukisu_version
+        working-directory: ${{ env.KERNEL_SRC_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          suki_version_actual="获取失败"
+          # SukiSU setup.sh 会创建一个名为 KernelSU 的目录
+          if [ -d "KernelSU" ]; then
+            cd KernelSU
+            # 优先使用git describe获取最可靠的版本信息
+            suki_version_actual=$(git describe --tags --long --dirty 2>/dev/null || git rev-parse --short HEAD)
+            cd ..
+          else
+            suki_version_actual="源码目录不存在"
+          fi
+          echo "Detected SukiSU version: ${suki_version_actual}"
+          echo "sukisu_version_string=${suki_version_actual}" >> $GITHUB_OUTPUT
+          
       - name: 应用SUSFS补丁
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         shell: bash
@@ -455,8 +419,6 @@ jobs:
           for fp in "${{ env.KERNEL_SRC_ROOT }}/common/build.config.gki" "${{ env.KERNEL_SRC_ROOT }}/common/build.config.gki.aarch64" "${{ env.KERNEL_SRC_ROOT }}/common/build.config"; do
             if [ -f "$fp" ]; then sed -i 's/check_defconfig//g' "$fp"; fi
           done
-
-      # ========================= START: MODIFIED SECTION =========================
       - name: 生成版本后缀和日期
         id: generate_suffixes
         env:
@@ -489,7 +451,6 @@ jobs:
           fi
           echo "FINAL_KERNEL_LOCAL_VERSION=${final_kernel_local_version}" >> "$GITHUB_ENV"
           echo "final_kernel_local_version_for_release_body=${final_kernel_local_version}" >> $GITHUB_OUTPUT
-
       - name: 配置内核版本参数
         working-directory: ${{ env.KERNEL_SRC_ROOT }}
         run: |
@@ -524,8 +485,6 @@ jobs:
             find ./common/android/ -name "abi_gki_protected_exports_*" -delete
             if [ -f "./build/kernel/kleaf/impl/stamp.bzl" ]; then sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" "./build/kernel/kleaf/impl/stamp.bzl"; fi
           fi
-      # ========================== END: MODIFIED SECTION ==========================
-
       - name: 校验关键内核配置
         run: |
           set -euo pipefail
@@ -633,7 +592,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          _svn="${{ env.SUKI_VERSION_NUM }}"
+          _svn="${{ steps.get_sukisu_version.outputs.sukisu_version_string }}"
           _kv="${{ env.SELECTED_KERNEL_VERSION }}"
           _sl="${{ env.SELECTED_SUB_LEVEL }}"
           _date="${{ env.BUILD_DATE_YYYYMMDD }}"
@@ -642,7 +601,7 @@ jobs:
           _tit=""
           _tag=""
           _stable_group_tag=""
-          if [[ "$_svn" != "NoVer" && "$_svn" != "" && "$_svn" != "获取失败" && ! "$_svn" == *notag* && ! "$_svn" == *计算错误* && ! "$_svn" == *克隆错误* && ! "$_svn" == *源码目录不存在* ]]; then
+          if [[ "$_svn" != "" && "$_svn" != "获取失败" && ! "$_svn" == *notag* && ! "$_svn" == *计算错误* && ! "$_svn" == *克隆错误* && ! "$_svn" == *源码目录不存在* ]]; then
             _sanitized_svn=$(echo "$_svn" | sed 's/[^a-zA-Z0-9._@-]/_/g')
             _stable_group_tag="${_base}-${_sanitized_svn}"
             _tit="${_base} ${_svn}"
