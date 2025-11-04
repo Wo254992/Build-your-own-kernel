@@ -652,6 +652,109 @@ jobs:
             check_cfg "CONFIG_ZRAM" "y" "true"; check_cfg "CONFIG_CRYPTO_LZ4K" "y" "true"
           fi
           if [ "$CRIT_FAIL" -ne 0 ]; then cat "$GKI_CHECK"; exit 1; fi
+          
+      - name: 编译前诊断检查
+        working-directory: ${{ env.KERNEL_SRC_ROOT }}
+        run: |
+          set -euo pipefail
+          
+          echo "=========================================="
+          echo "编译前诊断检查"
+          echo "=========================================="
+          
+          COMMON_PATH="./common"
+          
+          # 检查 KernelSU Makefile 集成
+          echo ""
+          echo "1. 检查 KernelSU Makefile 集成:"
+          if [ -f "$COMMON_PATH/Makefile" ]; then
+            if grep -n "kernelsu\|KernelSU" "$COMMON_PATH/Makefile"; then
+              echo "  ✅ Makefile 包含 KernelSU 引用"
+            else
+              echo "  ::warning::Makefile 中未找到 KernelSU 引用"
+            fi
+          fi
+          
+          # 检查 KernelSU/Makefile
+          echo ""
+          echo "2. 检查 KernelSU/Makefile:"
+          if [ -f "KernelSU/Makefile" ]; then
+            echo "  ✅ KernelSU/Makefile 存在"
+            echo "  内容预览:"
+            head -n 20 "KernelSU/Makefile" | sed 's/^/    /'
+          else
+            echo "  ::error::KernelSU/Makefile 不存在"
+          fi
+          
+          # 检查 KernelSU/kernel/Makefile
+          echo ""
+          echo "3. 检查 KernelSU/kernel/Makefile:"
+          if [ -f "KernelSU/kernel/Makefile" ]; then
+            echo "  ✅ KernelSU/kernel/Makefile 存在"
+            cat "KernelSU/kernel/Makefile" | sed 's/^/    /'
+          else
+            echo "  ::warning::KernelSU/kernel/Makefile 不存在"
+          fi
+          
+          # 检查关键的 C 文件是否存在
+          echo ""
+          echo "4. 检查 KernelSU 核心源文件:"
+          KSU_SOURCES=(
+            "KernelSU/kernel/ksu.c"
+            "KernelSU/kernel/core_hook.c"
+            "KernelSU/kernel/allowlist.c"
+            "KernelSU/kernel/sucompat.c"
+          )
+          
+          for src in "${KSU_SOURCES[@]}"; do
+            if [ -f "$src" ]; then
+              echo "  ✅ $src ($(wc -l < "$src") 行)"
+            else
+              echo "  ::warning::❌ $src 不存在"
+            fi
+          done
+          
+          # 检查 SUSFS 源文件
+          echo ""
+          echo "5. 检查 SUSFS 源文件:"
+          if [ -f "$COMMON_PATH/fs/susfs.c" ]; then
+            echo "  ✅ susfs.c ($(wc -l < "$COMMON_PATH/fs/susfs.c") 行)"
+          else
+            echo "  ::warning::susfs.c 不存在"
+          fi
+          
+          # 检查 fs/Makefile 是否包含 susfs
+          echo ""
+          echo "6. 检查 fs/Makefile 集成:"
+          if [ -f "$COMMON_PATH/fs/Makefile" ]; then
+            if grep -n "susfs" "$COMMON_PATH/fs/Makefile"; then
+              echo "  ✅ fs/Makefile 包含 susfs"
+            else
+              echo "  ::warning::fs/Makefile 中未找到 susfs"
+            fi
+          fi
+          
+          # 检查符号导出
+          echo ""
+          echo "7. 检查 KernelSU 符号导出:"
+          if find KernelSU -name "*.c" -exec grep -l "EXPORT_SYMBOL" {} \; | head -n 5; then
+            echo "  ✅ 发现符号导出"
+          else
+            echo "  ::warning::未发现符号导出"
+          fi
+          
+          # 检查是否有编译警告配置
+          echo ""
+          echo "8. 检查编译器标志:"
+          if [ -f "$COMMON_PATH/Makefile" ]; then
+            echo "  KBUILD_CFLAGS 相关配置:"
+            grep -n "KBUILD_CFLAGS\|CFLAGS" "$COMMON_PATH/Makefile" | head -n 10 | sed 's/^/    /' || echo "    未找到"
+          fi
+          
+          echo ""
+          echo "=========================================="
+          echo "诊断检查完成"
+          echo "=========================================="
       - name: 执行内核编译
         uses: nick-fields/retry@v3
         env:
