@@ -1,4 +1,4 @@
-name: 内核编译
+name: A内核编译
 
 permissions:
   contents: read
@@ -337,50 +337,200 @@ jobs:
         run: |
           set -euo pipefail
           COMMON_DIR_PATH="${{ env.KERNEL_SRC_ROOT }}/common"
+          
           apply_hooks_patch() {
-            cd "$COMMON_DIR_PATH"||exit 1
+            cd "$COMMON_DIR_PATH" || return 1
             HOOKS_PATCH_FILE="${GITHUB_WORKSPACE}/SukiSU_patch/hooks/syscall_hooks.patch"
             if [ -f "$HOOKS_PATCH_FILE" ]; then
               cp "$HOOKS_PATCH_FILE" ./syscall_hooks.patch
-              patch -p1 -F 3 < syscall_hooks.patch || { echo "::error::SukiSU hooks patch failed."; exit 1; }
+              if ! patch -p1 -F 3 < syscall_hooks.patch; then
+                echo "::error::SukiSU hooks patch failed."
+                return 1
+              fi
             fi
+            return 0
           }
+          
           apply_zram_compression_patches() {
             if [[ "${{ github.event.inputs.use_zram }}" == "true" ]]; then
-              cd "$COMMON_DIR_PATH"||exit 1
+              cd "$COMMON_DIR_PATH" || return 1
               ZRAM_PATCH_BASE="${GITHUB_WORKSPACE}/SukiSU_patch/other/zram"
-              local src_inc="${ZRAM_PATCH_BASE}/lz4k/include/linux"; local dst_inc="./include/linux"
-              if [ -d "$src_inc" ]; then mkdir -p "$dst_inc"; if [ -n "$(ls -A "$src_inc" 2>/dev/null)" ]; then cp -r "${src_inc}/." "$dst_inc/" || exit 1; fi; fi
-              local src_lib="${ZRAM_PATCH_BASE}/lz4k/lib"; local dst_lib="./lib"
-              if [ -d "$src_lib" ]; then mkdir -p "$dst_lib"; if [ -n "$(ls -A "$src_lib" 2>/dev/null)" ]; then cp -r "${src_lib}/." "$dst_lib/" || exit 1; fi; fi
-              local src_crypto="${ZRAM_PATCH_BASE}/lz4k/crypto"; local dst_crypto="./crypto"
-              if [ -d "$src_crypto" ]; then mkdir -p "$dst_crypto"; if [ -n "$(ls -A "$src_crypto" 2>/dev/null)" ]; then cp -r "${src_crypto}/." "$dst_crypto/" || exit 1; fi
-              else exit 1; fi
-              if [ -d "${ZRAM_PATCH_BASE}/lz4k_oplus" ]; then mkdir -p ./lib; cp -r "${ZRAM_PATCH_BASE}/lz4k_oplus" ./lib/ || exit 1; fi
+              
+              # 复制lz4k include文件
+              src_inc="${ZRAM_PATCH_BASE}/lz4k/include/linux"
+              dst_inc="./include/linux"
+              if [ -d "$src_inc" ]; then
+                mkdir -p "$dst_inc"
+                if [ -n "$(ls -A "$src_inc" 2>/dev/null)" ]; then
+                  cp -r "${src_inc}/." "$dst_inc/" || return 1
+                fi
+              fi
+              
+              # 复制lz4k lib文件
+              src_lib="${ZRAM_PATCH_BASE}/lz4k/lib"
+              dst_lib="./lib"
+              if [ -d "$src_lib" ]; then
+                mkdir -p "$dst_lib"
+                if [ -n "$(ls -A "$src_lib" 2>/dev/null)" ]; then
+                  cp -r "${src_lib}/." "$dst_lib/" || return 1
+                fi
+              fi
+              
+              # 复制lz4k crypto文件
+              src_crypto="${ZRAM_PATCH_BASE}/lz4k/crypto"
+              dst_crypto="./crypto"
+              if [ -d "$src_crypto" ]; then
+                mkdir -p "$dst_crypto"
+                if [ -n "$(ls -A "$src_crypto" 2>/dev/null)" ]; then
+                  cp -r "${src_crypto}/." "$dst_crypto/" || return 1
+                else
+                  return 1
+                fi
+              else
+                return 1
+              fi
+              
+              # 复制lz4k_oplus
+              if [ -d "${ZRAM_PATCH_BASE}/lz4k_oplus" ]; then
+                mkdir -p ./lib
+                cp -r "${ZRAM_PATCH_BASE}/lz4k_oplus" ./lib/ || return 1
+              fi
+              
+              # 应用lz4kd补丁
               LZ4KD_PATCH="${ZRAM_PATCH_BASE}/zram_patch/${{env.SELECTED_KERNEL_VERSION}}/lz4kd.patch"
-              if [ -f "$LZ4KD_PATCH" ]; then cp "$LZ4KD_PATCH" ./lz4kd.patch; patch -p1 -F 3 < lz4kd.patch || exit 1; fi
+              if [ -f "$LZ4KD_PATCH" ]; then
+                cp "$LZ4KD_PATCH" ./lz4kd.patch
+                if ! patch -p1 -F 3 < lz4kd.patch; then
+                  return 1
+                fi
+              fi
+              
+              # 应用lz4k_oplus补丁
               LZ4KOPLUS_PATCH="${ZRAM_PATCH_BASE}/zram_patch/${{env.SELECTED_KERNEL_VERSION}}/lz4k_oplus.patch"
-              if [ -f "$LZ4KOPLUS_PATCH" ]; then cp "$LZ4KOPLUS_PATCH" ./lz4k_oplus.patch; patch -p1 -F 3 < lz4k_oplus.patch || exit 1; fi
+              if [ -f "$LZ4KOPLUS_PATCH" ]; then
+                cp "$LZ4KOPLUS_PATCH" ./lz4k_oplus.patch
+                if ! patch -p1 -F 3 < lz4k_oplus.patch; then
+                  return 1
+                fi
+              fi
             fi
+            return 0
           }
+          
           apply_hide_stuff_patch() {
-            cd "$COMMON_DIR_PATH"||exit 1
+            cd "$COMMON_DIR_PATH" || return 1
             HIDE_PATCH_FILE="${GITHUB_WORKSPACE}/SukiSU_patch/69_hide_stuff.patch"
             if [ -f "$HIDE_PATCH_FILE" ]; then
               cp "$HIDE_PATCH_FILE" ./hide_stuff.patch
-              patch -p1 -F 3 < hide_stuff.patch || { echo "::error::Hide stuff patch failed."; exit 1; }
+              if ! patch -p1 -F 3 < hide_stuff.patch; then
+                echo "::error::Hide stuff patch failed."
+                return 1
+              fi
             fi
+            return 0
           }
+          
+          # 并行执行补丁应用
           apply_hooks_patch & PID_HOOKS=$!
           apply_zram_compression_patches & PID_ZRAM=$!
           apply_hide_stuff_patch & PID_HIDE=$!
+          
+          # 等待所有进程完成并检查退出状态
           FAIL=0
-          wait $PID_HOOKS || FAIL=1
-          wait $PID_ZRAM || FAIL=1
-          wait $PID_HIDE || FAIL=1
+          wait $PID_HOOKS || { echo "::error::Hooks patch failed"; FAIL=1; }
+          wait $PID_ZRAM || { echo "::error::ZRAM patch failed"; FAIL=1; }
+          wait $PID_HIDE || { echo "::error::Hide stuff patch failed"; FAIL=1; }
+          
           if [ "$FAIL" -eq 1 ]; then
             exit 1
           fi
+          
+          echo "✅ 所有补丁应用成功"
+          
+      - name: 验证KernelSU和SUSFS集成
+        working-directory: ${{ env.KERNEL_SRC_ROOT }}
+        run: |
+          set -euo pipefail
+          
+          echo "=========================================="
+          echo "验证 KernelSU 和 SUSFS 集成"
+          echo "=========================================="
+          
+          COMMON_PATH="./common"
+          VALIDATION_FAILED=0
+          
+          # 检查 KernelSU 目录
+          if [ -d "KernelSU" ]; then
+            echo "✅ KernelSU 目录存在"
+            echo "  版本: ${{ steps.get_sukisu_version.outputs.sukisu_version_string }}"
+          else
+            echo "::error::❌ KernelSU 目录不存在"
+            VALIDATION_FAILED=1
+          fi
+          
+          # 检查 SUSFS 文件
+          echo ""
+          echo "检查 SUSFS 文件:"
+          SUSFS_FILES=(
+            "$COMMON_PATH/fs/susfs.c"
+            "$COMMON_PATH/include/linux/susfs.h"
+          )
+          
+          for file in "${SUSFS_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "  ✅ $file"
+            else
+              echo "  ::warning::❌ $file 不存在"
+            fi
+          done
+          
+          # 检查关键的 KernelSU 文件
+          echo ""
+          echo "检查 KernelSU 核心文件:"
+          KSU_FILES=(
+            "KernelSU/kernel/ksu.c"
+            "KernelSU/kernel/core_hook.c"
+          )
+          
+          for file in "${KSU_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "  ✅ $file"
+            else
+              echo "  ::error::❌ $file 不存在"
+              VALIDATION_FAILED=1
+            fi
+          done
+          
+          # 检查 Makefile 和 Kconfig 集成
+          echo ""
+          echo "检查内核构建集成:"
+          
+          if grep -q "kernelsu" "$COMMON_PATH/Makefile" || grep -q "KernelSU" "$COMMON_PATH/Makefile"; then
+            echo "  ✅ Makefile 包含 KernelSU"
+          else
+            echo "  ::warning::❌ Makefile 可能未正确集成 KernelSU"
+          fi
+          
+          if [ -f "$COMMON_PATH/Kconfig" ]; then
+            if grep -q "KSU\|kernelsu" "$COMMON_PATH/Kconfig"; then
+              echo "  ✅ Kconfig 包含 KernelSU"
+            else
+              echo "  ::warning::❌ Kconfig 可能未正确集成 KernelSU"
+            fi
+          fi
+          
+          if [ $VALIDATION_FAILED -eq 1 ]; then
+            echo ""
+            echo "::error::=========================================="
+            echo "::error::验证失败: 关键文件缺失"
+            echo "::error::=========================================="
+            exit 1
+          fi
+          
+          echo ""
+          echo "=========================================="
+          echo "✅ 验证通过: KernelSU 和 SUSFS 已正确集成"
+          echo "=========================================="
       - name: 配置ZRAM算法
         if: ${{ github.event.inputs.use_zram == 'true' }}
         run: |
@@ -512,42 +662,118 @@ jobs:
           retry_on: timeout
           command: |
             set -euo pipefail
-            set -x
             BAZEL_WAS_USED="false"
+            BUILD_LOG="${{ env.KERNEL_SRC_ROOT }}/build_full.log"
+            
             execute_build_process() {
               cd "${{ env.KERNEL_SRC_ROOT }}" || exit 1
               B_SCRIPT="./build/build.sh"
               BZL_CACHE="/home/runner/.cache/bazel_disk_cache"
               mkdir -p "$BZL_CACHE"
+              
               if [ -f "$B_SCRIPT" ]; then
-                LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 BUILD_CONFIG=common/build.config.gki.aarch64 CC="/usr/bin/ccache clang" /usr/bin/time -v ./build/build.sh
+                echo "======================================"
+                echo "使用传统构建脚本编译..."
+                echo "内核版本: ${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
+                echo "======================================"
+                
+                # 运行构建并捕获所有输出
+                set +e
+                LTO=thin \
+                SYSTEM_DLKM_RE_SIGN=0 \
+                BUILD_SYSTEM_DLKM=0 \
+                KMI_SYMBOL_LIST_STRICT_MODE=0 \
+                BUILD_CONFIG=common/build.config.gki.aarch64 \
+                CC="/usr/bin/ccache clang" \
+                /usr/bin/time -v bash -x ./build/build.sh > "$BUILD_LOG" 2>&1
+                BUILD_EXIT_CODE=$?
+                set -e
+                
+                # 显示构建输出的最后部分
+                echo "::group::构建输出 (最后200行)"
+                tail -n 200 "$BUILD_LOG" || true
+                echo "::endgroup::"
+                
+                if [ $BUILD_EXIT_CODE -ne 0 ]; then
+                  echo "::error::编译失败,退出码: $BUILD_EXIT_CODE"
+                  
+                  # 查找错误信息
+                  echo "::group::错误信息搜索"
+                  grep -i "error:" "$BUILD_LOG" | tail -n 50 || echo "未找到 'error:' 标记"
+                  grep -i "failed" "$BUILD_LOG" | tail -n 20 || echo "未找到 'failed' 标记"
+                  grep -i "undefined reference" "$BUILD_LOG" | tail -n 20 || echo "未找到链接错误"
+                  echo "::endgroup::"
+                  
+                  # 检查是否是补丁相关的问题
+                  echo "::group::补丁相关检查"
+                  if grep -q "susfs" "$BUILD_LOG"; then
+                    echo "⚠️ 发现 SUSFS 相关内容"
+                    grep -i "susfs" "$BUILD_LOG" | tail -n 20
+                  fi
+                  if grep -q "KernelSU\|kernelsu\|KSU" "$BUILD_LOG"; then
+                    echo "⚠️ 发现 KernelSU 相关内容"
+                    grep -i "kernelsu\|ksu" "$BUILD_LOG" | tail -n 20
+                  fi
+                  echo "::endgroup::"
+                  
+                  exit $BUILD_EXIT_CODE
+                fi
+                
+                echo "✅ 传统构建成功完成"
               else
+                echo "======================================"
+                echo "使用Bazel编译..."
+                echo "内核版本: ${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}"
+                echo "======================================"
                 BAZEL_WAS_USED="true"
-                /usr/bin/time -v bash -c "tools/bazel build --disk_cache=\"${BZL_CACHE}\" --config=fast --lto=thin --profile=\"${BAZEL_PROFILE_PATH_IN_WORKSPACE}\" $BAZEL_OPTIMIZATION_FLAGS //common:kernel_aarch64_dist"
+                
+                set +e
+                /usr/bin/time -v bash -x -c "tools/bazel build \
+                  --disk_cache=\"${BZL_CACHE}\" \
+                  --config=fast \
+                  --lto=thin \
+                  --profile=\"${BAZEL_PROFILE_PATH_IN_WORKSPACE}\" \
+                  $BAZEL_OPTIMIZATION_FLAGS \
+                  //common:kernel_aarch64_dist" > "$BUILD_LOG" 2>&1
+                BUILD_EXIT_CODE=$?
+                set -e
+                
+                echo "::group::Bazel构建输出 (最后200行)"
+                tail -n 200 "$BUILD_LOG" || true
+                echo "::endgroup::"
+                
+                if [ $BUILD_EXIT_CODE -ne 0 ]; then
+                  echo "::error::Bazel编译失败,退出码: $BUILD_EXIT_CODE"
+                  
+                  echo "::group::Bazel错误信息"
+                  grep -i "error:" "$BUILD_LOG" | tail -n 50 || echo "未找到错误标记"
+                  grep -i "failed" "$BUILD_LOG" | tail -n 20 || echo "未找到失败标记"
+                  echo "::endgroup::"
+                  
+                  exit $BUILD_EXIT_CODE
+                fi
+                
+                echo "✅ Bazel构建成功完成"
               fi
             }
+            
             execute_build_process
-            ccache --show-stats
-            if [ -n "${CCACHE_LOGFILE}" ] && [ -f "${CCACHE_LOGFILE}" ]; then
+            
+            echo "::group::Ccache 统计"
+            ccache --show-stats || true
+            echo "::endgroup::"
+            
+            if [ -n "${CCACHE_LOGFILE:-}" ] && [ -f "${CCACHE_LOGFILE}" ]; then
+              echo "::group::Ccache 日志 (最后10行)"
               tail -n 10 "${CCACHE_LOGFILE}" || true
+              echo "::endgroup::"
             fi
+            
             if [ "$BAZEL_WAS_USED" = "true" ]; then
               if [ ! -f "${BAZEL_PROFILE_PATH_IN_WORKSPACE}" ]; then
-                echo "::warning::Bazel profile file was expected (Bazel build path taken) but not found at ${BAZEL_PROFILE_PATH_IN_WORKSPACE}."
+                echo "::warning::Bazel profile file expected but not found at ${BAZEL_PROFILE_PATH_IN_WORKSPACE}"
               fi
             fi
-      - name: KPM修补 (Android 12/13)
-        if: env.EFFECTIVE_USE_KPM == 'true' && (env.SELECTED_ANDROID_VERSION == 'android12' || env.SELECTED_ANDROID_VERSION == 'android13') && env.SELECTED_KERNEL_VERSION != '6.6'
-        run: |
-          set -euo pipefail
-          IMG_DIR="${{ env.KERNEL_SRC_ROOT }}/out/${{ env.SELECTED_ANDROID_VERSION }}-${{ env.SELECTED_KERNEL_VERSION }}/dist"
-          IMG_FILE="$IMG_DIR/Image"
-          if [ -d "$IMG_DIR" ] && [ -f "$IMG_FILE" ]; then
-            cd "$IMG_DIR" || exit 1
-            curl -LSs "https://raw.githubusercontent.com/ShirkNeko/SukiSU_patch/refs/heads/main/kpm/patch_linux" -o pk
-            chmod +x pk; ./pk
-            if [ -f "oImage" ]; then mv Image Image.o; mv oImage Image; fi
-          fi
       - name: KPM修补 (Android 14/15)
         if: env.EFFECTIVE_USE_KPM == 'true' && (env.SELECTED_ANDROID_VERSION == 'android14' || env.SELECTED_ANDROID_VERSION == 'android15') && env.SELECTED_KERNEL_VERSION != '6.6'
         run: |
