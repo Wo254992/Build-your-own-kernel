@@ -755,6 +755,95 @@ jobs:
           echo "=========================================="
           echo "诊断检查完成"
           echo "=========================================="
+      - name: 修复 KernelSU Makefile 集成
+        working-directory: ${{ env.KERNEL_SRC_ROOT }}
+        run: |
+          set -euo pipefail
+          
+          echo "=========================================="
+          echo "修复 KernelSU Makefile 集成"
+          echo "=========================================="
+          
+          COMMON_MAKEFILE="./common/Makefile"
+          
+          if [ ! -f "$COMMON_MAKEFILE" ]; then
+            echo "::error::Common Makefile not found!"
+            exit 1
+          fi
+          
+          # 检查是否已经包含 KernelSU
+          if grep -q "kernelsu\|KernelSU" "$COMMON_MAKEFILE"; then
+            echo "✅ Makefile 已包含 KernelSU 引用,无需修改"
+          else
+            echo "⚠️  Makefile 中未找到 KernelSU 引用,正在添加..."
+            
+            # 备份原始 Makefile
+            cp "$COMMON_MAKEFILE" "${COMMON_MAKEFILE}.backup"
+            
+            # 查找 drivers-y 行并在其后添加 KernelSU
+            if grep -q "^drivers-y" "$COMMON_MAKEFILE"; then
+              # 在 drivers-y 行后添加
+              sed -i '/^drivers-y/a obj-$(CONFIG_KSU) += KernelSU/' "$COMMON_MAKEFILE"
+              echo "  ✅ 已在 drivers-y 后添加 KernelSU"
+            elif grep -q "^core-y" "$COMMON_MAKEFILE"; then
+              # 如果没有 drivers-y,在 core-y 附近添加
+              sed -i '/^core-y.*kernel\//a obj-$(CONFIG_KSU) += KernelSU/' "$COMMON_MAKEFILE"
+              echo "  ✅ 已在 core-y 后添加 KernelSU"
+            else
+              # 作为后备,在文件末尾添加
+              echo "" >> "$COMMON_MAKEFILE"
+              echo "# KernelSU integration" >> "$COMMON_MAKEFILE"
+              echo "obj-\$(CONFIG_KSU) += KernelSU/" >> "$COMMON_MAKEFILE"
+              echo "  ✅ 已在文件末尾添加 KernelSU"
+            fi
+            
+            # 验证添加是否成功
+            if grep -q "KernelSU" "$COMMON_MAKEFILE"; then
+              echo "  ✅ 验证成功: KernelSU 已添加到 Makefile"
+              echo ""
+              echo "  相关行:"
+              grep -n "KernelSU" "$COMMON_MAKEFILE" | sed 's/^/    /'
+            else
+              echo "::error::添加 KernelSU 到 Makefile 失败"
+              exit 1
+            fi
+          fi
+          
+          # 同时检查和修复 Kconfig
+          COMMON_KCONFIG="./common/Kconfig"
+          if [ -f "$COMMON_KCONFIG" ]; then
+            if grep -q "source.*KernelSU" "$COMMON_KCONFIG"; then
+              echo "✅ Kconfig 已包含 KernelSU"
+            else
+              echo "⚠️  添加 KernelSU 到 Kconfig..."
+              
+              # 备份
+              cp "$COMMON_KCONFIG" "${COMMON_KCONFIG}.backup"
+              
+              # 在文件末尾添加
+              echo "" >> "$COMMON_KCONFIG"
+              echo "source \"KernelSU/Kconfig\"" >> "$COMMON_KCONFIG"
+              
+              if grep -q "KernelSU" "$COMMON_KCONFIG"; then
+                echo "  ✅ KernelSU 已添加到 Kconfig"
+              fi
+            fi
+          fi
+          
+          # 创建 KernelSU 顶层 Makefile (如果不存在)
+          if [ ! -f "KernelSU/Makefile" ]; then
+            echo "⚠️  创建 KernelSU/Makefile..."
+            cat > "KernelSU/Makefile" << 'EOF'
+# SPDX-License-Identifier: GPL-2.0-or-later
+obj-$(CONFIG_KSU) += kernel/
+EOF
+            echo "  ✅ 已创建 KernelSU/Makefile"
+          fi
+          
+          echo ""
+          echo "=========================================="
+          echo "✅ KernelSU Makefile 集成修复完成"
+          echo "=========================================="
       - name: 执行内核编译
         uses: nick-fields/retry@v3
         env:
