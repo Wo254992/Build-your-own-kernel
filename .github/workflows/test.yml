@@ -325,11 +325,38 @@ jobs:
           
           echo "✅ SukiSU 源码已下载"
           
+          # 检查关键文件是否存在
+          echo ""
+          echo "检查 KernelSU 关键文件:"
+          
+          if [ ! -f "KernelSU/Kconfig" ]; then
+            echo "::error::KernelSU/Kconfig 不存在，SukiSU setup 可能失败"
+            echo "尝试手动创建..."
+            
+            # 创建基本的 Kconfig 文件
+            cat > "KernelSU/Kconfig" << 'EOF'
+config KSU
+	bool "KernelSU"
+	depends on OVERLAY_FS
+	default y
+	help
+	  Enable KernelSU support.
+
+if KSU
+source "KernelSU/kernel/Kconfig"
+endif
+EOF
+            echo "  ✅ 已创建 KernelSU/Kconfig"
+          else
+            echo "  ✅ KernelSU/Kconfig 存在"
+          fi
+          
           # 手动确保 Makefile 集成
           COMMON_MAKEFILE="./common/Makefile"
           if [ -f "$COMMON_MAKEFILE" ]; then
             if ! grep -q "obj-.*KernelSU" "$COMMON_MAKEFILE"; then
-              echo "⚠️  setup.sh 未添加 Makefile 集成,手动添加..."
+              echo ""
+              echo "⚠️  添加 Makefile 集成..."
               
               # 查找合适的位置添加
               if grep -qn "^drivers-y" "$COMMON_MAKEFILE"; then
@@ -348,11 +375,24 @@ jobs:
           # 手动确保 Kconfig 集成
           COMMON_KCONFIG="./common/Kconfig"
           if [ -f "$COMMON_KCONFIG" ]; then
-            if ! grep -q "source.*KernelSU" "$COMMON_KCONFIG"; then
-              echo "⚠️  setup.sh 未添加 Kconfig 集成,手动添加..."
-              echo "" >> "$COMMON_KCONFIG"
-              echo "source \"KernelSU/Kconfig\"" >> "$COMMON_KCONFIG"
-              echo "  ✅ 已添加 Kconfig 集成"
+            if ! grep -q "source.*KernelSU/Kconfig" "$COMMON_KCONFIG"; then
+              echo ""
+              echo "⚠️  添加 Kconfig 集成..."
+              
+              # 备份原文件
+              cp "$COMMON_KCONFIG" "${COMMON_KCONFIG}.bak"
+              
+              # 找到合适的位置插入（通常在文件末尾，但在 endmenu 之前）
+              if grep -q "^endmenu" "$COMMON_KCONFIG"; then
+                # 在最后一个 endmenu 之前插入
+                sed -i '/^endmenu/i source "KernelSU/Kconfig"' "$COMMON_KCONFIG"
+                echo "  ✅ 已在 endmenu 前添加 Kconfig 集成"
+              else
+                # 在文件末尾添加
+                echo "" >> "$COMMON_KCONFIG"
+                echo 'source "KernelSU/Kconfig"' >> "$COMMON_KCONFIG"
+                echo "  ✅ 已在文件末尾添加 Kconfig 集成"
+              fi
             else
               echo "✅ Kconfig 已包含 KernelSU 集成"
             fi
@@ -360,12 +400,15 @@ jobs:
           
           # 确保顶层 KernelSU Makefile 存在
           if [ ! -f "KernelSU/Makefile" ]; then
+            echo ""
             echo "⚠️  创建 KernelSU/Makefile..."
             cat > "KernelSU/Makefile" << 'EOF'
-          # SPDX-License-Identifier: GPL-2.0-or-later
-          obj-$(CONFIG_KSU) += kernel/
-          EOF
+# SPDX-License-Identifier: GPL-2.0-or-later
+obj-$(CONFIG_KSU) += kernel/
+EOF
             echo "  ✅ 已创建 KernelSU/Makefile"
+          else
+            echo "✅ KernelSU/Makefile 存在"
           fi
           
           echo ""
@@ -570,9 +613,22 @@ jobs:
             VALIDATION_FAILED=1
           fi
           
-          # 检查 Makefile 集成 (关键!)
+          # 检查 KernelSU/Kconfig (关键!)
           echo ""
-          echo "检查 Makefile 集成 (最重要):"
+          echo "检查 KernelSU/Kconfig (最重要):"
+          if [ -f "KernelSU/Kconfig" ]; then
+            echo "  ✅ KernelSU/Kconfig 存在"
+            echo "  前10行内容:"
+            head -n 10 "KernelSU/Kconfig" | sed 's/^/    /'
+          else
+            echo "  ::error::❌ KernelSU/Kconfig 不存在!"
+            echo "  这将导致 Kconfig 解析失败"
+            VALIDATION_FAILED=1
+          fi
+          
+          # 检查 Makefile 集成
+          echo ""
+          echo "检查 Makefile 集成:"
           if [ -f "$COMMON_PATH/Makefile" ]; then
             if grep -q "obj-.*KernelSU\|obj-.*kernelsu" "$COMMON_PATH/Makefile"; then
               echo "  ✅ Makefile 正确包含 KernelSU"
@@ -580,7 +636,6 @@ jobs:
               grep -n "KernelSU\|kernelsu" "$COMMON_PATH/Makefile" | head -n 5 | sed 's/^/    /'
             else
               echo "  ::error::❌ Makefile 缺少 KernelSU 集成!"
-              echo "  这将导致 KernelSU 代码不被编译"
               VALIDATION_FAILED=1
             fi
           else
@@ -590,13 +645,19 @@ jobs:
           
           # 检查 Kconfig 集成
           echo ""
-          echo "检查 Kconfig 集成:"
+          echo "检查 common/Kconfig 集成:"
           if [ -f "$COMMON_PATH/Kconfig" ]; then
-            if grep -q "source.*KernelSU" "$COMMON_PATH/Kconfig"; then
-              echo "  ✅ Kconfig 包含 KernelSU"
+            if grep -q 'source.*KernelSU/Kconfig' "$COMMON_PATH/Kconfig"; then
+              echo "  ✅ Kconfig 包含 KernelSU 引用"
+              echo "  引用行:"
+              grep -n 'KernelSU/Kconfig' "$COMMON_PATH/Kconfig" | sed 's/^/    /'
             else
-              echo "  ::warning::❌ Kconfig 可能未正确集成 KernelSU"
+              echo "  ::error::❌ Kconfig 缺少 KernelSU/Kconfig 引用!"
+              VALIDATION_FAILED=1
             fi
+          else
+            echo "  ::error::❌ common/Kconfig 不存在"
+            VALIDATION_FAILED=1
           fi
           
           # 检查 KernelSU 顶层 Makefile
@@ -633,6 +694,7 @@ jobs:
             "KernelSU/kernel/ksu.c"
             "KernelSU/kernel/core_hook.c"
             "KernelSU/kernel/Makefile"
+            "KernelSU/kernel/Kconfig"
           )
           
           for file in "${KSU_FILES[@]}"; do
